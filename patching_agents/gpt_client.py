@@ -29,3 +29,16 @@ class GPTClient:
         content = response.choices[0].message.content if response and hasattr(response, 'choices') else None
             
         return content
+    
+    def send_prompt_with_functions(self, prompt, functions):
+        """Send a prompt with function calling enabled"""
+        gpt_model = os.environ.get("GPT_MODEL", "gpt-4-turbo-2024-04-09")
+        
+        response = self.client.chat.completions.create(
+            model=gpt_model,
+            messages=[{"role": "user", "content": prompt}],
+            functions=functions,
+            function_call="auto"  # Let AI decide whether to call functions
+        )
+        
+        return response

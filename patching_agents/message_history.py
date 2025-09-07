@@ -1,4 +1,5 @@
 from pprint import pformat
+import os
 
 # Partially taken from autocoderover
 
@@ -8,8 +9,46 @@ class MessageHistory:
     Abstrated into a class so that we can dump this to a file at any point.
     """
 
-    def __init__(self, messages=None):
-        self.messages: list[dict] = messages or []
+    def __init__(self, history_file_directory: str):
+        self.messages = []
+        
+        # Create message_history.txt inside the specified directory
+        self.history_file = os.path.join(history_file_directory, "message_history.txt")
+    
+
+    def update_history_file(self):
+        """Write current message history to file, removing redundant message history portions"""
+        with open(self.history_file, 'w') as f:
+            for message in self.messages:
+                content = message['content']
+                
+                # Replace message history portion with placeholder to avoid redundancy
+                if "For reference, here is the past message history:" in content:
+                    content = content.split("For reference, here is the past message history:")[0].strip()
+                    content += "\n\nFor reference, here is the past message history: {message_history}"
+                
+                if message["role"] == "system":
+                    f.write(f"SYSTEM INSTRUCTIONS: {content}\n\n")
+                elif message["role"] == "prompt":
+                    f.write(f"PROMPT:\n{content}\n\n")
+                else:
+                    f.write(f"AGENT RESPONSE:\n{content}\n\n")
+    
+    def get_messages(self) -> list[dict]:
+        """
+        Get the messages in the thread.
+        Returns:
+            List[Dict]: The message thread.
+        """
+        return self.messages
+    
+    def add_system_message(self, message: str):
+        """
+        Add a new system message to the thread.
+        Args:
+            message (str): The content of the new system message.
+        """
+        self.messages.append({"role": "system", "content": message})
     
     def add_prompt(self, role: str, message: str):
         """
@@ -18,33 +57,45 @@ class MessageHistory:
             message (str): The content of the new prompt.
         """
         self.messages.append({"role": "prompt", "content": message})
+        self.update_history_file()
 
-    def add_agent(self, role: str, message: str):
+    def add_agent(self, agent_role: str, message: str):
         """
         Add a new agent response to the thread.
         Args:
             message (str): The content of the new message.
             role (str): The role of the agent giving the message.
         """
-        self.messages.append({"role": role, "content": message})
-
-    def to_msg(self) -> list[dict]:
+        self.messages.append({"role": agent_role, "content": message})
+        self.update_history_file()
+    
+    def add_message_history(self, new_msg_history):
         """
-        Convert to the format to be consumed by the model.
-        Returns:
-            List[Dict]: The message thread.
+        Add a new message history to the thread.
+        Args:
+            new_msg_history (MessageHistory): The message history to add.
         """
-        return self.messages
+        self.messages.extend(new_msg_history.get_messages())
 
-    def __str__(self):
-        return pformat(self.messages, width=160, sort_dicts=False)
-
+    # TODO: incorporate this later
     def get_round_number(self) -> int:
         """
         From the current message history, decide how many rounds have been completed.
         """
         completed_rounds = 0
         for message in self.messages:
-            if message["role"] == "assistant":
+            if message["role"] == "prompt":
                 completed_rounds += 1
         return completed_rounds
+
+    def format_history(self) -> str:
+        """Read from the clean history file"""
+        try:
+            with open(self.history_file, 'r') as f:
+                return f.read().strip()
+        except FileNotFoundError:
+            return ""
+
+    def __str__(self):
+        """Called when printing the message history"""
+        return self.format_history()

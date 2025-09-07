@@ -31,15 +31,13 @@ class ContextAgent(AbstractAgent):
 
             # Iterate through each bug in the file
             for bug_in_file in bugs_in_file:
+                # Use the common bug formatting from AbstractAgent
+                result += self.format_basic_bug_info(bug_in_file, bug_number, java_file_path, code)
+                
+                # Extract bug info for context analysis
                 bug_location, bug_code, buggy_node_info = bug_in_file
                 buggy_node_location, buggy_node = buggy_node_info
                 buggy_node = utils.get_node_text(buggy_node, code)
-                result += f'Bug #{bug_number}:\n'
-                result += f'File path: {java_file_path}\n'
-                result += f'Bug line number(s): {bug_location}\n'
-                result += f'Bug lines: {bug_code}'
-                result += f'Buggy node line number(s): {buggy_node_location}\n'
-                result += f'Buggy node: {buggy_node}\n'
                 
                 # Context retrieval specific additions
                 comments_before_node = utils.get_comments_before_node(java_file_path, buggy_node)
@@ -57,7 +55,6 @@ class ContextAgent(AbstractAgent):
     
     def format_callgraph_info(self, java_file_path: str, bug_location: Tuple[int, int]) -> str:
         """Format call graph information for the bug location"""
-        import os
         joern_executable = os.getenv('JOERN_EXECUTABLE', '/usr/local/bin/joern')
         joern_directory = os.getenv('JOERN_DIRECTORY', '/usr/local/share/joern')
         

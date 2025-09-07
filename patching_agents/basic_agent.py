@@ -8,8 +8,6 @@ import retrieval_utils as utils
 from typing import Tuple
 
 class BasicAgent(AbstractAgent):
-    def get_prompt(self) -> str:
-        return self.format_context()
     
     def get_agent_role(self) -> str:
         return "basic"
@@ -29,15 +27,8 @@ class BasicAgent(AbstractAgent):
 
             # Iterate through each bug in the file
             for bug_in_file in bugs_in_file:
-                bug_location, bug_code, buggy_node_info = bug_in_file
-                buggy_node_location, buggy_node = buggy_node_info
-                buggy_node = utils.get_node_text(buggy_node, code)
-                result += f'Bug #{bug_number}:\n'
-                result += f'File path: {java_file_path}\n'
-                result += f'Bug line number(s): {bug_location}\n'
-                result += f'Bug lines: {bug_code}'
-                result += f'Buggy node line number(s): {buggy_node_location}\n'
-                result += f'Buggy node: {buggy_node}\n'
+                # Use the common bug formatting from AbstractAgent
+                result += self.format_basic_bug_info(bug_in_file, bug_number, java_file_path, code)
                 
                 bug_number += 1
                 result += '\n'
