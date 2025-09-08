@@ -73,9 +73,10 @@ class ApiAgent(AbstractAgent):
         }
         
         result = f"API Analysis:\n"
-        result += f"Reasoning: {reasoning}\n"
-        result += f"Additional categories needed: {additional_categories}\n"
-        result += f"API Context: {api_context}\n"
+        result += f"The following APIs have already been imported: {existing_apis}\n"
+        result += f"In addition, the following categories of APIs has been identified as potentially useful for repairing the bug: {candidate_apis}\n"
+        result += f"Here are the APIs in those categories: {candidate_apis}\n"
+        result += f"Here is the reasoning for why these APIs may be useful: {reasoning}\n"
         
         return result
     

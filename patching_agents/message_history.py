@@ -9,15 +9,19 @@ class MessageHistory:
     Abstrated into a class so that we can dump this to a file at any point.
     """
 
-    def __init__(self, history_file_directory: str):
+    def __init__(self, history_file_directory: str, project_name: str):
         self.messages = []
         
-        # Create message_history.txt inside the specified directory
-        self.history_file = os.path.join(history_file_directory, "message_history.txt")
+        # Create project-specific message file inside the specified directory
+        filename = f"{project_name}_messages.txt"
+        self.history_file = os.path.join(history_file_directory, filename)
     
 
     def update_history_file(self):
         """Write current message history to file, removing redundant message history portions"""
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(self.history_file), exist_ok=True)
+        
         with open(self.history_file, 'w') as f:
             for message in self.messages:
                 content = message['content']

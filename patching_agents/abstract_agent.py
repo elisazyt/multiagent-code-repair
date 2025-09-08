@@ -17,25 +17,35 @@ class AbstractAgent(ABC):
         self.msg_history = self.information.get_info("message history")
 
     def run(self) -> tuple[str, MessageHistory]:
-        prompt = self.get_prompt()
-        self.msg_history.add_prompt(self.information.get_info("agent role"), prompt)
-        result_text = self.gpt_client.receive_response(self.gpt_client.send_prompt(prompt))
+        # Get base prompt (context only, no message history)
+        base_prompt = self.get_base_prompt()
+        
+        # Create full prompt for AI (base + message history)
+        # Remove placeholder from base_prompt and add actual message history
+        full_prompt = base_prompt.replace("\n\nFor reference, here is the past message history: {message_history}", "")
+        if self.msg_history.messages:
+            history_text = self.msg_history.format_history()
+            full_prompt += f"\n\nFor reference, here is the past message history:\n{history_text}"
+        else:
+            full_prompt += "\n\nFor reference, here is the past message history:\n(This is the first message in the conversation thread, no previous message history is available.)"
+        
+        # Store only the base prompt (no message history) to avoid redundancy
+        self.msg_history.add_prompt(self.information.get_info("agent role"), base_prompt)
+        
+        # Send full prompt to AI (with message history)
+        result_text = self.gpt_client.receive_response(self.gpt_client.send_prompt(full_prompt))
         self.msg_history.add_agent(self.information.get_info("agent role"), result_text)
         return result_text, self.msg_history
 
-    def get_prompt(self) -> str:
+    def get_base_prompt(self) -> str:
         agent_task = self.information.get_info("agent task")
-        final_prompt = f"""
-        The task of the agent is: {agent_task}
+        final_prompt = f"""The task of the agent is: {agent_task}
 
-        Additionally, you are given the following context information about the bug:\n
-        """
+You are given the following context information about the bug:\n"""
         final_prompt += self.format_context()
         
-        # Add message history for AI context (excluding redundant message history portions)
-        if self.msg_history.messages:
-            history_text = self.msg_history.format_history()
-            final_prompt += f"\n\nFor reference, here is the past message history:\n{history_text}"
+        # Add message history placeholder to base prompt (for storage consistency)
+        final_prompt += "\n\nFor reference, here is the past message history: {message_history}"
         
         return final_prompt
     
