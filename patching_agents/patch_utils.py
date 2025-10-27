@@ -5,8 +5,29 @@ def extract_markdown_blocks(agent_response) -> list[str]:
     '''
     Extract the markdown blocks from the agent response. Each element in the list corresponds to
     the bug fix for one location.
+    
+    Args:
+        agent_response: The full response from the agent (string)
+    
+    Returns:
+        List of code blocks extracted from markdown (```java ... ```)
     '''
-    pass
+    code_blocks = []
+    
+    # Split by markdown code block markers
+    parts = agent_response.split('```java')
+    
+    # Skip the first part (everything before the first code block)
+    for part in parts[1:]:
+        # Find the closing ```
+        code_block_end = part.find('```')
+        if code_block_end != -1:
+            # Extract the code block content
+            code_block = part[:code_block_end].strip()
+            code_blocks.append(code_block)
+    
+    return code_blocks
+
 
 def replace_buggy_node(java_file_path, buggy_node_location, fixed_code) -> str:
     """
@@ -46,7 +67,8 @@ def replace_buggy_node(java_file_path, buggy_node_location, fixed_code) -> str:
     
     return result
 
-def apply_all_patches(java_file_path, buggy_node_locations, fixed_code_blocks) -> str:
+
+def apply_all_patches(java_file_path, buggy_node_locations, agent_response) -> str:
     """
     Apply all patches to a Java file, working from the end to avoid line number shifts.
     
@@ -58,6 +80,9 @@ def apply_all_patches(java_file_path, buggy_node_locations, fixed_code_blocks) -
     Returns:
         The patched Java file content
     """
+
+    fixed_code_blocks = extract_markdown_blocks(agent_response)
+    
     if len(buggy_node_locations) != len(fixed_code_blocks):
         raise ValueError("The number of buggy node locations and fixed code blocks must be the same")
 
