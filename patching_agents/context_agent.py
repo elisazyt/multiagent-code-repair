@@ -8,13 +8,10 @@ import isolate_bug as ib
 import retrieval_utils as utils
 from joern_callgraph import JoernSession
 
-class ContextAgent(AbstractAgent):
-    
-    def get_prompt(self) -> str:
-        return self.format_context()
-    
-    def get_agent_role(self) -> str:
-        return "context retrieval"
+class ContextAgent:
+
+    # TODO: figure out what initialization parameters are needed, and how this agent interacts
+    # with the other agents
     
     def format_context(self) -> str:
         """Format context with comments and call graph information"""

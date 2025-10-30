@@ -1,5 +1,11 @@
 import os
 import shutil
+import sys
+
+# Add the context_retrieval directory to the path
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'context_retrieval'))
+import isolate_bug as ib
+import retrieval_utils as utils
 
 def extract_markdown_blocks(agent_response) -> list[str]:
     '''
@@ -68,48 +74,89 @@ def replace_buggy_node(java_file_path, buggy_node_location, fixed_code) -> str:
     return result
 
 
-def apply_all_patches(java_file_path, buggy_node_locations, agent_response) -> str:
+def apply_all_patches(bug_files_and_locations, agent_response, agent_role) -> dict[str, str]:
     """
-    Apply all patches to a Java file, working from the end to avoid line number shifts.
+    Apply all patches to multiple Java files.
     
     Args:
-        java_file_path: Path to the original Java file
-        buggy_node_locations: List of (start_line, end_line) tuples for each bug (1-based, inclusive)
-        fixed_code_blocks: List of fixed code strings (one per bug)
+        bug_files_and_locations: List of tuples (java_file_path, modified_source_name, List of bug locations)
+        agent_response: The agent's response containing markdown code blocks
+        agent_role: The role of the agent (e.g., 'basic', 'api', 'context')
     
     Returns:
-        The patched Java file content
+        dict[str, str]: Mapping from modified_source_name to patch_file_path
+                       e.g., {'org.jfree.chart.plot.PiePlot': '/path/to/PiePlot_patched_basic.java'}
     """
-
     fixed_code_blocks = extract_markdown_blocks(agent_response)
-    
-    if len(buggy_node_locations) != len(fixed_code_blocks):
-        raise ValueError("The number of buggy node locations and fixed code blocks must be the same")
 
-    # Create a copy in the patches folder
-    patches_dir = os.path.join(os.path.dirname(os.path.dirname(java_file_path)), 'patches')
-    os.makedirs(patches_dir, exist_ok=True)
+    if not bug_files_and_locations or not fixed_code_blocks:
+        return {}
     
-    # Get the filename and create patched version
-    original_filename = os.path.basename(java_file_path)
-    patched_filename = original_filename.replace('.java', '_patched.java')
-    patched_file_path = os.path.join(patches_dir, patched_filename)
+    # Count bugs per file
+    bugs_per_file = []
+    for java_file_path, modified_source_name, bug_locations_list in bug_files_and_locations:
+        bugs_per_file.append(len(bug_locations_list))
     
-    # Copy the original file to the patches folder
-    shutil.copy2(java_file_path, patched_file_path)
+    # Split fixed_code_blocks based on bugs per file
+    fixed_code_blocks_per_file = []
+    start_idx = 0
+    for count in bugs_per_file:
+        end_idx = start_idx + count
+        fixed_code_blocks_per_file.append(fixed_code_blocks[start_idx:end_idx])
+        start_idx = end_idx
     
-    num_patches = len(buggy_node_locations)
+    # Track mapping of modified_source_name -> patch_file_path
+    patch_mapping = {}
     
-    # Apply patches in reverse order (from highest line numbers to lowest)
-    for i in range(num_patches - 1, -1, -1):
-        # Get patched content
-        patched_content = replace_buggy_node(patched_file_path, buggy_node_locations[i], fixed_code_blocks[i])
+    # Process each file
+    # Structure: (file_path, modified_source_name, bug_locations_list)
+    for i, (java_file_path, modified_source_name, bug_locations_list) in enumerate(bug_files_and_locations):
+        print(f"[DEBUG] Processing file: {java_file_path} for source: {modified_source_name}")
+        # Get buggy node info for this file
+        bugs_in_file = ib.retrieve_buggy_lines_and_node(java_file_path, bug_locations_list)
         
-        # Write it back to the file
-        with open(patched_file_path, 'w', encoding='utf-8') as f:
-            f.write(patched_content)
+        buggy_node_locations = []
+        for bug_in_file in bugs_in_file:
+            bug_location, bug_code, buggy_node_info = bug_in_file
+            buggy_node_location, buggy_node = buggy_node_info
+            buggy_node_locations.append(buggy_node_location)
+        print(f"[DEBUG] Buggy node locations (start,end): {buggy_node_locations}")
+        
+        if not buggy_node_locations:
+            continue
+        
+        if len(buggy_node_locations) != len(fixed_code_blocks_per_file[i]):
+            raise ValueError(f"Mismatch: {len(buggy_node_locations)} bug locations but {len(fixed_code_blocks_per_file[i])} code blocks for {java_file_path}")
+
+        # Create a copy in the patches folder
+        patches_dir = os.path.join(os.path.dirname(os.path.dirname(java_file_path)), 'patches')
+        os.makedirs(patches_dir, exist_ok=True)
+        
+        # Get the filename and create patched version
+        original_filename = os.path.basename(java_file_path)
+        patched_filename = original_filename.replace('.java', f'_patched_{agent_role}.java')
+        patched_file_path = os.path.join(patches_dir, patched_filename)
+        
+        # Copy the original file to the patches folder
+        shutil.copy2(java_file_path, patched_file_path)
+        
+        num_patches = len(buggy_node_locations)
+        
+        # Apply patches in reverse order (from highest line numbers to lowest)
+        for j in range(num_patches - 1, -1, -1):
+            # Get patched content
+            block_preview = " ".join(fixed_code_blocks_per_file[i][j].splitlines()[:2])
+            print(f"[DEBUG] Applying patch index {j} to lines {buggy_node_locations[j]} with block preview: {block_preview}")
+            patched_content = replace_buggy_node(patched_file_path, buggy_node_locations[j], fixed_code_blocks_per_file[i][j])
+            
+            # Write it back to the file
+            with open(patched_file_path, 'w', encoding='utf-8') as f:
+                f.write(patched_content)
+        
+        # Store the mapping: modified_source_name -> patch_file_path
+        patch_mapping[modified_source_name] = patched_file_path
     
-    return patched_content
+    return patch_mapping
 
 
 def fix_indentation(first_buggy_line, fixed_code) -> str:

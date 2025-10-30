@@ -1,7 +1,13 @@
-import test_suites_helpers as tsh
+from . import test_suites_helpers as tsh
 import os
 import subprocess
-from ..context_retrieval import retrieval_utils as cr
+import sys
+
+# Add parent directory to path for absolute imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import context_retrieval.retrieval_utils as cr
+
+# Java 11 environment is handled in test_suites_helpers._get_java11_env()
 
 def run_defects4j_test(project_name: str, version: str, working_dir: str, java_patch_files: dict[str, str]) -> list:
     '''
@@ -14,7 +20,7 @@ def run_defects4j_test(project_name: str, version: str, working_dir: str, java_p
     - java_patch_files: Dict containing entries in the form of {modified source name: path to java patch file}
     '''
     if not tsh.checkout_defects4j_project(project_name, version, working_dir):
-        return {'error': 'Failed to checkout project'}
+        return [{'error': 'Failed to checkout project'}]
     
     results = []
 
@@ -23,22 +29,38 @@ def run_defects4j_test(project_name: str, version: str, working_dir: str, java_p
         full_source_path = tsh.get_full_source_path(project_name, working_dir, modified_source)
         
         try:
+            if modified_source not in java_patch_files:
+                return [{'error': f'Missing mapping for modified source: {modified_source}'}]
             if not tsh.apply_java_file_patch(java_patch_files[modified_source], full_source_path):
-                return {'error': 'Failed to apply Java file patch'}
-        
-            # Run the test command
+                return [{'error': 'Failed to apply Java file patch'}]
+            # Run the test command with Java 11
             result = subprocess.run(
                 ['defects4j', 'test', '-w', working_dir],
                 capture_output=True,
                 text=True,
-                cwd=working_dir
+                cwd=working_dir,
+                env=tsh._get_java11_env()
             )
+            # Debug: confirm the test command execution and surface key info
+            try:
+                print(f"[DEBUG] Ran: defects4j test -w {working_dir}")
+                print(f"[DEBUG] Return code: {result.returncode}")
+                if result.stderr:
+                    print("[DEBUG] stderr (first 300 chars):")
+                    print(result.stderr[:300])
+                if result.stdout:
+                    # print only a small slice to avoid flooding the console
+                    print("[DEBUG] stdout (first 300 chars):")
+                    print(result.stdout[:300])
+            except Exception:
+                pass
+            
         
             # Parse the output to extract test results
             output = result.stdout
             return_code = result.returncode
             
-                # Parse failing test names
+            # Parse failing test names
             failing_tests = []
             lines = output.split('\n')
 
@@ -56,7 +78,7 @@ def run_defects4j_test(project_name: str, version: str, working_dir: str, java_p
         
         except Exception as e:
             print(f"Error occurred: {e}")
-            return {'error': str(e)}
+            return [{'error': str(e)}]
 
     return results
 
@@ -90,14 +112,22 @@ def get_failing_test_info(working_dir: str, project_name: str, failing_tests: li
 
             with open(test_path, 'rb') as f:
                 code = f.read()
-            buggy_method = cr.get_node_text(cr.retrieve_method_by_name(test_path, method_name), code)
-
-            buggy_line = cr.retrieve_code_by_line_number(test_path, [(line_number, line_number)])
+            
+            method_node = cr.retrieve_method_by_name(test_path, method_name)
+            if method_node:
+                buggy_method = cr.get_node_text(method_node, code)
+                # Mark the failing line in the full method with line numbers
+                buggy_method_with_marker = cr.mark_failing_line_in_method(buggy_method, line_number, method_node.start_point[0] + 1)
+                buggy_line = cr.retrieve_code_by_line_number(test_path, (line_number, line_number))
+            else:
+                buggy_method = "not found"
+                buggy_method_with_marker = "not found"
+                buggy_line = "not found"
 
         test_info = {
             'failing test': test_identifier,
             'failure message': failure_message,
-            'buggy method': buggy_method,
+            'buggy method': buggy_method_with_marker,  # Use the marked version with line numbers
             'buggy line': buggy_line
         }
         all_info.append(test_info)

@@ -15,7 +15,7 @@ def get_node_text(node: Node, code: bytes) -> str:
 
 
 # This retrieves the buggy code for all buggy files
-def retrieve_code_by_line_number(java_file_path: str, bug_location: Tuple[int, int]) -> List[str]:
+def retrieve_code_by_line_number(java_file_path: str, bug_location: Tuple[int, int]) -> str:
     """
     Retrieve the exact code corresponding to the buggy lines of code
     """
@@ -33,7 +33,7 @@ def retrieve_code_by_line_number(java_file_path: str, bug_location: Tuple[int, i
         # Validate line numbers
         if start_idx < 0 or end_idx > len(lines) or start_idx >= end_idx:
             print(f"Warning: Invalid line range ({start_line}, {end_line}) for file with {len(lines)} lines")
-            return []
+            return ""
         
         # Extract the buggy lines of code (inclusive)
         bug_lines = lines[start_idx:end_idx]
@@ -43,10 +43,10 @@ def retrieve_code_by_line_number(java_file_path: str, bug_location: Tuple[int, i
         
     except FileNotFoundError:
         print(f"Error: File {java_file_path} not found")
-        return []
+        return ""
     except Exception as e:
         print(f"Error reading file {java_file_path}: {e}")
-        return []
+        return ""
 
 
 def get_comments_before_node(java_file_path: str, node: Node) -> Node:
@@ -137,6 +137,79 @@ def get_name_from_tree_sitter_node(tree_sitter_node, java_file_path: str) -> Tup
 # other things to consider as context: instance variables, method params, etc
 
 # data flow: get variable in each statement, find where variable is from- use tree sitter
+
+def retrieve_method_by_name(java_file_path: str, method_name: str) -> Node:
+    """
+    Retrieve a method node by its name from a Java file.
+    
+    Args:
+        java_file_path: Path to the Java file
+        method_name: Name of the method to find
+        
+    Returns:
+        Node: The method_declaration node, or None if not found
+    """
+    try:
+        with open(java_file_path, 'rb') as f:
+            code = f.read()
+        
+        tree = parser.parse(code)
+        
+        # Query for method declarations
+        query = Query(JAVA_LANGUAGE, """
+        (method_declaration
+            name: (identifier) @method_name)
+        """)
+        
+        matches = query.matches(tree.root_node)
+        
+        for match in matches:
+            pattern_id, captures_dict = match
+            if 'method_name' in captures_dict:
+                method_name_node = captures_dict['method_name'][0]
+                found_name = get_node_text(method_name_node, code)
+                
+                if found_name == method_name:
+                    # Get the parent method_declaration node
+                    current = method_name_node.parent
+                    while current and current.type != 'method_declaration':
+                        current = current.parent
+                    if current:
+                        return current
+        
+        return None
+        
+    except Exception as e:
+        print(f"Error retrieving method by name: {e}")
+        return None
+
+
+def mark_failing_line_in_method(method_code: str, failing_line_number: int, method_start_line: int) -> str:
+    """
+    Add line numbers to method code and mark the failing line.
+    
+    Args:
+        method_code: The full method code as a string
+        failing_line_number: The absolute line number where failure occurred (1-based)
+        method_start_line: The line number where the method starts (1-based)
+    
+    Returns:
+        Method code with line numbers prefixed and failing line marked
+    """
+    lines = method_code.split('\n')
+    method_relative_line = failing_line_number - method_start_line + 1  # 1-based within method
+    
+    result_lines = []
+    for i, line in enumerate(lines, start=1):  # i is 1-based relative to method
+        absolute_line = method_start_line + i - 1
+        if i == method_relative_line:
+            # Mark the failing line
+            result_lines.append(f"{absolute_line:4d} >>> {line} <<< FAILED HERE")
+        else:
+            result_lines.append(f"{absolute_line:4d}     {line}")
+    
+    return '\n'.join(result_lines)
+
 
 # TODO: Implement data flow analysis functions
 

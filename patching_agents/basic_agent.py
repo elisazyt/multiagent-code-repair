@@ -1,4 +1,4 @@
-from abstract_agent import AbstractAgent
+from patching_agent import PatchingAgent
 import sys
 import os
 # Add the context_retrieval directory to the path
@@ -7,7 +7,7 @@ import isolate_bug as ib
 import retrieval_utils as utils
 from typing import Tuple
 
-class BasicAgent(AbstractAgent):
+class BasicAgent(PatchingAgent):
     
     def get_agent_role(self) -> str:
         return "basic"
@@ -19,8 +19,9 @@ class BasicAgent(AbstractAgent):
         bug_number = 1
 
         # Iterate through each file
+        # Structure: (file_path, modified_source_name, bug_locations_list)
         for buggy_file_info in bug_locations:
-            java_file_path, bug_locations_list = buggy_file_info
+            java_file_path, modified_source_name, bug_locations_list = buggy_file_info
             with open(java_file_path, 'rb') as f:
                 code = f.read()
             bugs_in_file = ib.retrieve_buggy_lines_and_node(java_file_path, bug_locations_list)

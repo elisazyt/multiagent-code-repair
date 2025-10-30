@@ -1,4 +1,4 @@
-from abstract_agent import AbstractAgent
+from patching_agent import PatchingAgent
 import sys
 import os
 # Add the context_retrieval directory to the path
@@ -10,7 +10,7 @@ import retrieval_utils as utils
 from api_db_retrieval import retrieve_existing_apis, analyze_bug_for_apis, query_api_db
 from typing import Tuple
 
-class ApiAgent(AbstractAgent):
+class ApiAgent(PatchingAgent):
 
     def get_agent_role(self) -> str:
         return "api"
@@ -23,8 +23,9 @@ class ApiAgent(AbstractAgent):
         bug_number = 1
 
         # Iterate through each file
+        # Structure: (file_path, modified_source_name, bug_locations_list)
         for buggy_file_info in bug_locations:
-            java_file_path, bug_locations_list = buggy_file_info
+            java_file_path, modified_source_name, bug_locations_list = buggy_file_info
             with open(java_file_path, 'rb') as f:
                 code = f.read()
             bugs_in_file = ib.retrieve_buggy_lines_and_node(java_file_path, bug_locations_list)
@@ -74,7 +75,7 @@ class ApiAgent(AbstractAgent):
         
         result = f"API Analysis:\n"
         result += f"The following APIs have already been imported: {existing_apis}\n"
-        result += f"In addition, the following categories of APIs has been identified as potentially useful for repairing the bug: {candidate_apis}\n"
+        result += f"In addition, the following categories of APIs has been identified as potentially useful for repairing the bug: {additional_categories}\n"
         result += f"Here are the APIs in those categories: {candidate_apis}\n"
         result += f"Here is the reasoning for why these APIs may be useful: {reasoning}\n"
         

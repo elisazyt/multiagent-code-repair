@@ -5,5 +5,5 @@ __pycache__/
 ALL_TESTS/
 faiss_test/
 .java-version
-test_programs/
 message_histories/
+patches/

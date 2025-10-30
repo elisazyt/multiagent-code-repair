@@ -18,6 +18,17 @@ def connect_paths(project_name: str, working_dir: str, paths: dict[str, str], pa
 # HELPER FUNCTIONS FOR RUN_DEFECTS4J_TEST
 ########################
 
+def _get_java11_env():
+    """Get environment with Java 11 for Defects4J."""
+    env = os.environ.copy()
+    try:
+        java11_path = subprocess.run(['/usr/libexec/java_home', '-v', '11'], capture_output=True, text=True, check=True).stdout.strip()
+        env['JAVA_HOME'] = java11_path
+        env['PATH'] = f"{java11_path}/bin:{env.get('PATH', '')}"
+    except:
+        pass  # Fallback to default if Java 11 not found
+    return env
+
 def checkout_defects4j_project(project_name: str, version: str, working_dir: str):
     """Checkout a Defects4J project to create the working directory with buggy code.
     
@@ -30,11 +41,12 @@ def checkout_defects4j_project(project_name: str, version: str, working_dir: str
     - bool: True if checkout successful, False otherwise
     """
     try:
-        # Run the checkout command
+        # Run the checkout command with Java 11 environment
         result = subprocess.run(
             ['defects4j', 'checkout', '-p', project_name, '-v', version + 'b', '-w', working_dir],
             capture_output=True,
             text=True,
+            env=_get_java11_env()
         )
         
         if result.returncode == 0:
@@ -70,11 +82,12 @@ def get_modified_sources(project_name: str, bug_id: str) -> list[str]:
     - list[str]: List of modified source packages (e.g., ['com.google.javascript.jscomp.TypeCheck'])
     """
     try:
-        # Run the info command for specific bug
+        # Run the info command for specific bug with Java 11 environment
         result = subprocess.run(
             ['defects4j', 'info', '-p', project_name, '-b', bug_id],
             capture_output=True,
-            text=True
+            text=True,
+            env=_get_java11_env()
         )
         
         if result.returncode == 0:

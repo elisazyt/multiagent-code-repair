@@ -28,8 +28,13 @@ class MessageHistory:
                 
                 # Replace message history portion with placeholder to avoid redundancy
                 if "For reference, here is the past message history:" in content:
-                    content = content.split("For reference, here is the past message history:")[0].strip()
-                    content += "\n\nFor reference, here is the past message history: {message_history}"
+                    # Check if this is already the "no previous message history" text BEFORE splitting
+                    if "This is the first message in the conversation thread, no previous message history is available. Proceed with your task, ignoring this message." in content:
+                        # Keep the original content as-is
+                        pass
+                    else:
+                        content = content.split("For reference, here is the past message history:")[0].strip()
+                        content += "\n\nFor reference, here is the past message history: {message_history}"
                 
                 if message["role"] == "system":
                     f.write(f"SYSTEM INSTRUCTIONS: {content}\n\n")
