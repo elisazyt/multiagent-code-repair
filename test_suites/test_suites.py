@@ -72,8 +72,7 @@ def run_defects4j_test(project_name: str, version: str, working_dir: str, java_p
 
             results.append({
             'success': return_code == 0,
-            'failing_tests': failing_tests,
-            'return_code': return_code
+            'failing_tests': failing_tests
             })
         
         except Exception as e:
@@ -131,5 +130,12 @@ def get_failing_test_info(working_dir: str, project_name: str, failing_tests: li
             'buggy line': buggy_line
         }
         all_info.append(test_info)
+
     
-    return all_info
+    test_info_string = ""
+    for test_info in all_info:
+        test_info_string += f"Failing test identifier: {test_info['failing test']}\n"
+        test_info_string += f"Failure message: {test_info['failure message']}\n"
+        test_info_string += f"Failing method: {test_info['buggy method']}\n"
+        test_info_string += f"Failure line: {test_info['buggy line']}\n"
+    return test_info_string

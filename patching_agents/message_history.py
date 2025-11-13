@@ -59,7 +59,7 @@ class MessageHistory:
         """
         self.messages.append({"role": "system", "content": message})
     
-    def add_prompt(self, role: str, message: str):
+    def add_prompt(self, message: str):
         """
         Add a new prompt to the thread.
         Args:

@@ -21,6 +21,8 @@ class InfoDict:
     def add_bug_info(self, project_name: str, bug_id: str, bug_locations: List[Tuple[str, List[Tuple[int, int]]]], working_directory: str):
         self.add_info("project name", project_name)
         self.add_info("bug id", bug_id)
+        # Add the working directory where the user wants to running the Defects4J test.
+        # This is where the entire Defects4J project is checked out, tests are run, etc.
         self.add_info("working directory", working_directory)
 
         # Enrich bug_locations with modified_source_name

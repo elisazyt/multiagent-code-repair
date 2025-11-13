@@ -1,7 +1,6 @@
-SYSTEM_TASK = f"""
-You are given this buggy Java code: {buggy_code_file}. Generate a patch for the bugs.
-
-# TODO: Add a description of the bug locations.
+SYSTEM_DESCRIPTION = """
+TASK:
+Generate a patch for the buggy Java code.
 
 Do not assume any methods exist unless they are explicitly called or defined.
 If the patch calls a new method, it should be explicitly defined and fully implemented,
@@ -12,7 +11,23 @@ All buggy locations should be fixed. Refactoring and commenting should not be co
 The user cannot modify your code, so do not suggest incomplete code which requires others to modify.
 Suggest the full code instead of partial code or code changes.
 
-# TODO: Add the return format of the patch (.java file)
+RETURN FORMAT:
+For every single bug location, return the patch for the entire buggy node in markdown format, with the following syntax:
+```java
+[patch]
+```
+Do not use markdown format for anything that is not a patch. Only use markdown format for the patches.
+The number of markdown blocks should equal the number of bug locations.
+The patch should contain the full code for the bug location.
 """
 
-# TODO: prompts for basic, api, repair pattern, and chain of thought agents
+
+BASIC_PROMPT = "Carry out the given task given by the system description."
+
+
+API_PROMPT = f"""
+You are an agent that retrieves and uses any necessary APIs to carry out the task given by the system
+description. Some bug fixes don't require API usage, so you should first analyze the context and determine
+if new APIs are needed.
+
+Whenever possible, use the retrieved APIs instead of creating your own functions."""

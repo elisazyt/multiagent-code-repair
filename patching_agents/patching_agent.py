@@ -36,7 +36,7 @@ class PatchingAgent(ABC):
         # If no message history, replace placeholder with appropriate text
         if not any(msg["role"] not in ["system"] for msg in self.msg_history.messages):
             base_prompt = base_prompt.replace("{message_history}", "(This is the first message in the conversation thread, no previous message history is available. Proceed with your task, ignoring this message.)")
-        self.msg_history.add_prompt(self.agent_role, base_prompt)
+        self.msg_history.add_prompt(base_prompt)
         
         # Send full prompt to AI (with message history)
         response = self.gpt_client.send_prompt(full_prompt)
@@ -52,6 +52,58 @@ class PatchingAgent(ABC):
 
         return patch_mapping
 
+    
+    def regenerate_patch(self) -> dict[str, str]:
+        """
+        Regenerate the patch for the given bug.
+        """
+        # Get base prompt (no message history)
+        base_prompt = self.get_regeneration_prompt()
+        
+        # Create full prompt for AI (base + message history)
+        full_prompt = base_prompt.replace("\n\nFor reference, here is the past message history: {message_history}", "")
+        history_text = self.msg_history.format_history()
+        full_prompt += f"\n\nFor reference, here is the past message history:\n{history_text}"
+        
+        # Store only the base prompt (no message history) to avoid redundancy
+        # Keep {message_history} placeholder as-is in stored version
+        self.msg_history.add_prompt(base_prompt)
+        
+        # Send full prompt to AI (with message history)
+        response = self.gpt_client.send_prompt(full_prompt)
+        result_text = self.gpt_client.receive_response(response)
+        
+        # Save patches and get mapping
+        patch_mapping = self.save_patch(result_text)
+        
+        # Add agent response to history
+        self.msg_history.add_agent(self.agent_role, result_text)
+        
+        return patch_mapping
+    
+    
+    def get_regeneration_prompt(self) -> str:
+        """
+        Get the base prompt for patch regeneration (without message history).
+        """
+        final_prompt = """Your task is to patch a bug in Java. Below is the complete message history from previous attempts to fix this bug, including the original bug context, your previous patch attempt, and the failing test information.
+
+Review the message history and regenerate the patch. The previous patch failed the tests shown in the message history. Correct the patch so that it passes all failing tests.
+
+All instructions and context are provided in the message history below. Follow the same format requirements as specified in the system instructions.
+
+For reference, here is the past message history: {message_history}
+
+As a reminder, return the patch in markdown format for each bug location, with the following syntax:
+```java
+[patch]
+```
+Do not use markdown format for anything that is not a patch. Only use markdown format for the patches.
+The number of markdown blocks should equal the number of bug locations.
+The patch should contain the full code for the bug location.
+"""
+        return final_prompt
+
 
     def get_base_prompt(self) -> str:
         final_prompt = f"""The task of the agent is: {self.agent_task}
@@ -61,6 +113,15 @@ You are given the following context information about the bug:\n"""
         
         # Add message history placeholder to base prompt (for storage consistency)
         final_prompt += "\n\nFor reference, here is the past message history: {message_history}"
+
+        # Add reminder about markdown format
+        final_prompt += f'''\n\nREMINDER:
+        For every single bug location, return the patch for the entire buggy node in markdown format, with the following syntax:
+        ```java
+        [patch]
+        ```
+        Do not use markdown format for anything that is not a patch. Only use markdown format for the patches.
+        '''
         
         return final_prompt
     
