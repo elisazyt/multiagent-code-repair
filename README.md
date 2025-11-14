@@ -10,6 +10,7 @@ Overview:
     - Message history, saved as a .txt file
 
 COMPONENTS OF SYSTEM:
+
 API database (complete):
 - Existing APIs:
     - Retrieve existing API imports in each file
