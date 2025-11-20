@@ -10,12 +10,13 @@ sys.path.insert(0, patching_agents_path)
 import info_dict
 from basic_agent import BasicAgent
 from api_agent import ApiAgent
+from context_agent import ContextAgent
 from testing_agent import TestingAgent
 import patch_utils as p_utils
 import message_history
 
 # Import from root directory
-from prompt_templates import SYSTEM_DESCRIPTION, API_PROMPT, BASIC_PROMPT
+from prompt_templates import SYSTEM_DESCRIPTION, API_PROMPT, BASIC_PROMPT, CONTEXT_PROMPT
 from test_suites import test_suites as ts
 
 # TODO: figure out the order in which the prompt and message history are provided.
@@ -42,9 +43,15 @@ bug_locations = [(buggy_file_path, [(231, 237)])]
 working_directory = '' # TODO: set this to the working directory where the project will be checked out and tested
 information.add_bug_info("Lang", "12", bug_locations, working_directory)
 
+
+
+####################################################################
+# AGENTS/FUNCTIONALITIES THAT ARE CURRENTLY WORKING:
+####################################################################
+
 # Create agents after info is set up
-apiagent = ApiAgent(information, "api", API_PROMPT)
 basicagent = BasicAgent(information, "basic", BASIC_PROMPT)
+apiagent = ApiAgent(information, "api", API_PROMPT)
 testingagent = TestingAgent(information)
 
 # Run agents in sequence
@@ -54,29 +61,49 @@ mapping = apiagent.run()
 # mapping = basicagent.run()
 # No need to add_message_history since curr_msg_history is the same as msg_history
 
-print(f'''
-########################################################
-finished running api agent with mapping: {mapping}
-########################################################
-''')
+print('Finished running api agent with mapping: {mapping}')
 
 
 # Use testing agent to run tests
 test_result = testingagent.run(mapping)
 if test_result is not None:
-    print(f'''
-    ########################################################
-    Tests failed. Regenerating patch...
-    ########################################################
-    ''')
+    print('One or more test suites failed, regenerating patch')
     
     regenerated_mapping = apiagent.regenerate_patch()
-    print(f'''
-    ########################################################
-    Finished regenerating patch with mapping: {regenerated_mapping}
-    ########################################################
-    ''')
+    print('Finished regenerating patch, testing it again.')
     testingagent.run(regenerated_mapping)
 else:
     print("Patch passed the test suite and can be stored as a candidate.")
     # TODO: store the patch as a candidate
+
+
+
+####################################################################
+# AGENTS/FUNCTIONALITIES THAT ARE STILL BEING IMPLEMENTED:
+####################################################################
+
+# Add Joern configuration
+joern_executable = '/usr/local/bin/joern'  # Path to Joern executable
+joern_directory = ''  # Path to Joern directory
+information.add_joern_config(joern_executable, joern_directory)
+
+context_agent = ContextAgent(information, "context", CONTEXT_PROMPT)
+
+print(f"\n" + "=" * 60)
+print("Step 3: Initializing ContextAgent")
+print("=" * 60)
+
+agent_role = "context"
+agent_task = "Retrieve context information including call graph analysis"
+agent = ContextAgent(information, agent_role, agent_task)
+print(f"✓ ContextAgent initialized")
+
+# Step 4: Test format_context
+print(f"\n" + "=" * 60)
+print("Step 4: Testing format_context()")
+print("=" * 60)
+
+print(f"\nCalling format_context()...")
+result = agent.format_context()
+print("\nResult:")
+print(result)

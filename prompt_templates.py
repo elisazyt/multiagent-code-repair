@@ -31,3 +31,6 @@ description. Some bug fixes don't require API usage, so you should first analyze
 if new APIs are needed.
 
 Whenever possible, use the retrieved APIs instead of creating your own functions."""
+
+
+CONTEXT_PROMPT = "" # TODO: add context prompt

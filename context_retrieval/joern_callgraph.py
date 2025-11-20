@@ -21,6 +21,7 @@ class JoernSession:
         Initialize Joern session.
         
         Args:
+            java_file_path: Path to the Java file
             joern_executable: Path to Joern executable
             joern_directory: Path to Joern installation directory (contains workspace subdirectory)
         """
@@ -42,6 +43,9 @@ class JoernSession:
             True if successful, False otherwise
         """
         try:
+            # Set project name immediately
+            self.project_name = project_name
+            
             # Ensure the main workspace directory exists
             os.makedirs(self.joern_directory, exist_ok=True)
             
@@ -80,7 +84,7 @@ class JoernSession:
         Load a CPG for a specific project.
         
         Args:
-            project_name: Name of the project whose CPG to load
+            project_name: Name of the project whose CPG to load (e.g., "Chart15")
             
         Returns:
             True if successful, False otherwise
@@ -117,7 +121,9 @@ class JoernSession:
             raise RuntimeError("No project loaded. Call load_cpg() first.")
         
         start_line, end_line = line_numbers
-        query = f'cpg.method.filter(m => m.lineNumber.isDefined && m.lineNumber.get >= {start_line} && m.lineNumber.get <= {end_line}).map(m => (m.fullName)).toJson'
+        # Originally: query = f'cpg.method.filter(m => m.lineNumber.isDefined && m.lineNumber.get >= {start_line} && m.lineNumber.get <= {end_line}).call.filter(call => call.label == "CALL" && call.name.matches("^[a-zA-Z][a-zA-Z0-9]*$")).toJson'
+        # Find methods that contain the line range: method.startLine <= start_line AND method.endLine >= end_line
+        query = f'cpg.method.filter(m => m.lineNumber.isDefined && m.lineNumber.get <= {start_line} && m.lineNumberEnd.isDefined && m.lineNumberEnd.get >= {end_line}).map(m => (m.fullName)).toJson'
         
         stdout, stderr = self._run_joern_query(query)
         if not stdout:
@@ -185,7 +191,9 @@ class JoernSession:
             raise RuntimeError("No project loaded. Call load_cpg() first.")
         
         start_line, end_line = line_numbers
-        query = f'cpg.method.filter(m => m.lineNumber.isDefined && m.lineNumber.get >= {start_line} && m.lineNumber.get <= {end_line}).call.filter(call => call.label == "CALL" && call.name.matches("^[a-zA-Z][a-zA-Z0-9]*$")).toJson'
+        # Get all method calls directly within the specific line range
+        # Filter out operators (they start with "<operator>.") to only get actual method calls
+        query = f'cpg.call.filter(call => call.lineNumber.isDefined && call.lineNumber.get >= {start_line} && call.lineNumber.get <= {end_line} && !call.name.startsWith("<operator>")).map(call => (call.name, call.lineNumber.get, call.code)).toJson'
         
         stdout, stderr = self._run_joern_query(query)
         if not stdout:
@@ -195,23 +203,38 @@ class JoernSession:
             # Extract JSON string from Joern output
             lines = stdout.strip().split('\n')
             json_str = None
+            
+            # Try multiple patterns to find the JSON output
             for line in lines:
                 # Strip ANSI color codes
                 line_clean = re.sub(r'\x1b\[[0-9;]*m', '', line)
-                # Look for the JSON output line
+                
+                # Pattern 1: "val resX: String = ..."
                 if 'val res' in line_clean and 'String = ' in line_clean:
-                    # Extract the JSON string from the output
                     json_start = line_clean.find('String = ') + 8
                     json_str = line_clean[json_start:].strip()
-                    # Remove any extra quotes at the beginning and end
-                    # Handle both single and double quotes
-                    while (json_str.startswith('"') and json_str.endswith('"')) or (json_str.startswith("'") and json_str.endswith("'")):
-                        json_str = json_str[1:-1]
+                    break
+                # Pattern 2: Look for lines that start with "[" (JSON array)
+                elif line_clean.strip().startswith('[') and line_clean.strip().endswith(']'):
+                    json_str = line_clean.strip()
+                    break
+                # Pattern 3: Look for lines containing JSON-like structure
+                elif ('[' in line_clean and '{' in line_clean and '_1' in line_clean):
+                    # Try to extract JSON from this line
+                    # Find the JSON array part
+                    start_idx = line_clean.find('[')
+                    end_idx = line_clean.rfind(']') + 1
+                    if start_idx >= 0 and end_idx > start_idx:
+                        json_str = line_clean[start_idx:end_idx]
                     break
             
             if not json_str:
-                print("No JSON output found in Joern response")
                 return []
+            
+            # Remove any extra quotes at the beginning and end
+            # Handle both single and double quotes
+            while (json_str.startswith('"') and json_str.endswith('"')) or (json_str.startswith("'") and json_str.endswith("'")):
+                json_str = json_str[1:-1]
             
             # Handle escaped quotes within the string
             json_str = json_str.replace('\\"', '"')
@@ -232,16 +255,15 @@ class JoernSession:
             callees = []
             if isinstance(data, list):
                 for callee in data:
-                    if isinstance(callee, dict):
-                        # Extract name and lineNumber from the callee object
-                        method_name = callee.get('name')
-                        line_number = callee.get('lineNumber')
+                    if isinstance(callee, dict) and '_1' in callee and '_2' in callee and '_3' in callee:
+                        # Joern serializes tuples as objects with _1, _2, _3 keys
+                        # Format: {"_1": name, "_2": lineNumber, "_3": code}
+                        method_name = callee['_1']
+                        line_number = callee['_2']
+                        code = callee['_3']
                         
                         if method_name and line_number:
-                            # Get the content of the line
-                            line_content = utils.retrieve_code_by_line_number(self.java_file_path, (line_number, line_number))
-                            
-                            callees.append((method_name, line_number, line_content.strip() if line_content else ""))
+                            callees.append((method_name, line_number, code if code else ""))
             else:
                 print(f"Expected list but got {type(data)}: {data}")
             
@@ -345,11 +367,13 @@ class JoernSession:
             raise RuntimeError("No project loaded. Call load_cpg() first.")
         
         try:
-            # Construct the path to the CPG file
-            cpg_path = f"{self.joern_directory}/workspace/{self.project_name}/cpg.bin"
+            # Use open() to load existing project - this doesn't overwrite the CPG
+            # open(projectName) opens the existing project and makes it active
+            # This is safer than importCpg() which can overwrite/corrupt the CPG
+            if not self.project_name:
+                raise RuntimeError("Project name not set. Call load_cpg() first.")
             
-            # Create commands: load CPG and run query
-            load_command = f'importCpg("{cpg_path}")'
+            load_command = f'open("{self.project_name}")'
             commands = f"{load_command}\n{query}\n"
             
             # Run in a new process

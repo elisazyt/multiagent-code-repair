@@ -39,6 +39,17 @@ class InfoDict:
                 enriched_bug_locations.append((java_file_path, filename, bug_locations_list))
         
         self.add_info("bug files and locations", enriched_bug_locations)
+    
+    def add_joern_config(self, joern_executable: str, joern_directory: str):
+        """
+        Add Joern configuration to InfoDict.
+        
+        Args:
+            joern_executable: Path to Joern executable
+            joern_directory: Path to Joern directory (contains workspace subdirectory)
+        """
+        self.add_info("joern executable", joern_executable)
+        self.add_info("joern directory", joern_directory)
 
     def add_info(self, info_type, info):
         self.info_dict[info_type] = info
