@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import Tuple
 from gpt_client import GPTClient
 from message_history import MessageHistory
 from info_dict import InfoDict
@@ -116,11 +117,14 @@ You are given the following context information about the bug:\n"""
 
         # Add reminder about markdown format
         final_prompt += f'''\n\nREMINDER:
-        For every single bug location, return the patch for the entire buggy node in markdown format, with the following syntax:
+        For every unique buggy node (method/class), return ONE patch for the entire buggy node in markdown format, enclosed in the following syntax:
         ```java
-        [patch]
+
         ```
+        IMPORTANT: If multiple bug locations are within the same method/class node, provide only ONE patch for that entire node (not one per bug location).
+        The number of markdown code blocks should equal the number of unique buggy nodes, not the number of bug locations.
         Do not use markdown format for anything that is not a patch. Only use markdown format for the patches.
+        Additionally, briefly explain your reasoning for the patch.
         '''
         
         return final_prompt
@@ -142,6 +146,83 @@ You are given the following context information about the bug:\n"""
         
         return result
     
+    def format_bugs_grouped_by_node(self, bugs_in_file, java_file_path: str, code: bytes, start_number: int = 1) -> Tuple[str, int]:
+        """
+        Format bugs grouped by unique buggy nodes. Returns (formatted_string, next_bug_number).
+        Also stores unique node locations in InfoDict to avoid recomputing later.
+        
+        Args:
+            bugs_in_file: List of (bug_location, bug_code, buggy_node_info) tuples
+            java_file_path: Path to the Java file
+            code: File contents as bytes
+            start_number: Starting bug number
+            
+        Returns:
+            Tuple of (formatted_string, next_bug_number)
+        """
+        result = ''
+        node_number = 1
+        bug_number = start_number  # Track bug number separately, incrementing across all nodes
+        
+        # Group bugs by unique buggy node
+        unique_nodes = {}  # (start, end) -> list of (bug_location, bug_code, buggy_node_info)
+        for bug_in_file in bugs_in_file:
+            bug_location, bug_code, buggy_node_info = bug_in_file
+            if buggy_node_info is None:
+                continue
+            buggy_node_location, buggy_node = buggy_node_info
+            if buggy_node_location not in unique_nodes:
+                unique_nodes[buggy_node_location] = []
+            unique_nodes[buggy_node_location].append(bug_in_file)
+        
+        # Store unique node locations in InfoDict for later use in apply_all_patches
+        # This avoids calling retrieve_buggy_lines_and_node again (which is slow)
+        # Structure: List[List[Tuple[int, int]]] - one list per file, each containing sorted node locations
+        # Initialize the list if this is the first file being processed
+        if "unique node locations per file" not in self.information.info_dict:
+            self.information.info_dict["unique node locations per file"] = []
+        
+        # Get sorted unique node locations for this file and append to the list
+        unique_node_locations = sorted(unique_nodes.keys())
+        self.information.info_dict["unique node locations per file"].append(unique_node_locations)
+        
+        # Format each unique node (showing all bug locations within it)
+        for buggy_node_location in sorted(unique_nodes.keys()):
+            bugs_in_node = unique_nodes[buggy_node_location]
+            
+            # Use the first bug's node info for formatting (they all have the same node)
+            first_bug = bugs_in_node[0]
+            bug_location, bug_code, buggy_node_info = first_bug
+            buggy_node_location, buggy_node = buggy_node_info
+            
+            # Format the node info
+            buggy_node_text = r_utils.get_node_text(buggy_node, code)
+            
+            # Show the buggy node first
+            result += f'{"="*60}\n'
+            result += f'Buggy Node #{node_number}:\n'
+            result += f'{"="*60}\n'
+            result += f'File path: {java_file_path}\n'
+            result += f'Buggy node line number(s): {buggy_node_location}\n'
+            result += f'\nBuggy node:\n{buggy_node_text}\n'
+            
+            # Then show all bug locations within this node
+            result += f'\nBug locations within this node:\n'
+            if len(bugs_in_node) > 1:
+                result += f'Note: This node contains {len(bugs_in_node)} bug locations. Provide ONE patch for the entire node.\n\n'
+            
+            # Number bugs sequentially across all nodes
+            for bug_loc, bug_code, _ in bugs_in_node:
+                result += f'Bug #{bug_number}:\n'
+                result += f'  Bug line number(s): {bug_loc}\n'
+                result += f'  Bug lines: {bug_code}\n'
+                bug_number += 1
+            
+            node_number += 1
+            result += '\n'
+        
+        return result, bug_number
+    
 
     def save_patch(self, response: str) -> dict[str, str]:
         """
@@ -153,8 +234,9 @@ You are given the following context information about the bug:\n"""
         Returns:
             dict[str, str]: Mapping from modified_source_name to patch_file_path
         """
-        buggy_node_locations = self.information.get_info("bug files and locations")
-        patch_mapping = p_utils.apply_all_patches(buggy_node_locations, response, self.get_agent_role())
+        bug_files_and_locations = self.information.get_info("bug files and locations")
+        unique_node_locations_per_file = self.information.get_info("unique node locations per file")
+        patch_mapping = p_utils.apply_all_patches(bug_files_and_locations, response, self.get_agent_role(), unique_node_locations_per_file)
         return patch_mapping
 
     @abstractmethod

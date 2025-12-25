@@ -205,7 +205,7 @@ def get_full_test_path(project_name: str, working_dir: str, test_identifier_with
         # Get the connecting path for this project
     paths = {
         'chart': 'tests',
-        'closure': 'tests',
+        'closure': 'test',
         'mockito': 'test', 
         'math': 'src/test/java',
         'lang': 'src/test/java',

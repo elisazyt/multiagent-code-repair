@@ -74,7 +74,7 @@ def replace_buggy_node(java_file_path, buggy_node_location, fixed_code) -> str:
     return result
 
 
-def apply_all_patches(bug_files_and_locations, agent_response, agent_role) -> dict[str, str]:
+def apply_all_patches(bug_files_and_locations, agent_response, agent_role, unique_node_locations_per_file) -> dict[str, str]:
     """
     Apply all patches to multiple Java files.
     
@@ -82,6 +82,8 @@ def apply_all_patches(bug_files_and_locations, agent_response, agent_role) -> di
         bug_files_and_locations: List of tuples (java_file_path, modified_source_name, List of bug locations)
         agent_response: The agent's response containing markdown code blocks
         agent_role: The role of the agent (e.g., 'basic', 'api', 'context')
+        unique_node_locations_per_file: List[List[Tuple[int, int]]] - pre-computed unique node locations per file
+                                        Each inner list contains sorted (start_line, end_line) tuples for that file
     
     Returns:
         dict[str, str]: Mapping from modified_source_name to patch_file_path
@@ -92,15 +94,13 @@ def apply_all_patches(bug_files_and_locations, agent_response, agent_role) -> di
     if not bug_files_and_locations or not fixed_code_blocks:
         return {}
     
-    # Count bugs per file
-    bugs_per_file = []
-    for java_file_path, modified_source_name, bug_locations_list in bug_files_and_locations:
-        bugs_per_file.append(len(bug_locations_list))
+    # Count unique nodes per file from the pre-computed locations
+    unique_nodes_per_file = [len(locations) for locations in unique_node_locations_per_file]
     
-    # Split fixed_code_blocks based on bugs per file
+    # Split fixed_code_blocks based on unique nodes per file
     fixed_code_blocks_per_file = []
     start_idx = 0
-    for count in bugs_per_file:
+    for count in unique_nodes_per_file:
         end_idx = start_idx + count
         fixed_code_blocks_per_file.append(fixed_code_blocks[start_idx:end_idx])
         start_idx = end_idx
@@ -112,21 +112,18 @@ def apply_all_patches(bug_files_and_locations, agent_response, agent_role) -> di
     # Structure: (file_path, modified_source_name, bug_locations_list)
     for i, (java_file_path, modified_source_name, bug_locations_list) in enumerate(bug_files_and_locations):
         print(f"[DEBUG] Processing file: {java_file_path} for source: {modified_source_name}")
-        # Get buggy node info for this file
-        bugs_in_file = ib.retrieve_buggy_lines_and_node(java_file_path, bug_locations_list)
         
-        buggy_node_locations = []
-        for bug_in_file in bugs_in_file:
-            bug_location, bug_code, buggy_node_info = bug_in_file
-            buggy_node_location, buggy_node = buggy_node_info
-            buggy_node_locations.append(buggy_node_location)
-        print(f"[DEBUG] Buggy node locations (start,end): {buggy_node_locations}")
+        # Use pre-computed node locations
+        buggy_node_locations = unique_node_locations_per_file[i]
+        print(f"[DEBUG] Bug locations: {bug_locations_list}")
+        print(f"[DEBUG] Unique buggy node locations (start,end): {buggy_node_locations}")
         
         if not buggy_node_locations:
             continue
         
         if len(buggy_node_locations) != len(fixed_code_blocks_per_file[i]):
-            raise ValueError(f"Mismatch: {len(buggy_node_locations)} bug locations but {len(fixed_code_blocks_per_file[i])} code blocks for {java_file_path}")
+            raise ValueError(f"Mismatch: {len(buggy_node_locations)} unique buggy nodes but {len(fixed_code_blocks_per_file[i])} code blocks for {java_file_path}. "
+                           f"Note: Multiple bug locations in the same method/class should result in only one patch for that entire node.")
 
         # Create a copy in the patches folder
         patches_dir = os.path.join(os.path.dirname(os.path.dirname(java_file_path)), 'patches')
