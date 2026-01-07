@@ -1,25 +1,29 @@
-from . import test_suites_helpers as tsh
 import os
 import subprocess
 import sys
 
 # Add parent directory to path for absolute imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add test_suites directory to path for imports
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+import test_suites_helpers as tsh
 import context_retrieval.retrieval_utils as cr
 
 # Java 11 environment is handled in test_suites_helpers._get_java11_env()
 
-def run_defects4j_test(project_name: str, version: str, working_dir: str, java_patch_files: dict[str, str]) -> list:
+def run_defects4j_test(project_name: str, version: str, checkout_dir: str, java_patch_files: dict[str, str]) -> list:
     '''
     Run the test suite for a given project and version.
     
     Parameters:
     - project_name: Project name (e.g., 'Chart', 'Closure', 'Math')
     - version: Bug version (e.g., '2', '3', '4')
-    - working_dir: Absolute path to the project directory
+    - checkout_dir: Base directory where Defects4J checkouts are stored
     - java_patch_files: Dict containing entries in the form of {modified source name: path to java patch file}
     '''
-    if not tsh.checkout_defects4j_project(project_name, version, working_dir):
+    success, working_dir = tsh.checkout_defects4j_project(project_name, version, checkout_dir)
+    if not success:
         return [{'error': 'Failed to checkout project'}]
     
     results = []

@@ -24,40 +24,63 @@ def _get_java11_env():
     try:
         java11_path = subprocess.run(['/usr/libexec/java_home', '-v', '11'], capture_output=True, text=True, check=True).stdout.strip()
         env['JAVA_HOME'] = java11_path
-        env['PATH'] = f"{java11_path}/bin:{env.get('PATH', '')}"
+        # Prepend Java 11 to PATH, preserving existing PATH (which should include defects4j)
+        existing_path = env.get('PATH', '')
+        env['PATH'] = f"{java11_path}/bin:{existing_path}"
     except:
         pass  # Fallback to default if Java 11 not found
     return env
 
-def checkout_defects4j_project(project_name: str, version: str, working_dir: str):
-    """Checkout a Defects4J project to create the working directory with buggy code.
+
+def checkout_defects4j_project(project_name: str, bug_id: str, checkout_dir: str):
+    """Checkout the buggy version of a Defects4J project.
+    If the directory already exists, skips checkout.
     
     Parameters:
     - project_name (str): Project name (e.g., 'Chart', 'Closure', 'Lang')
-    - version (str): Bug version (e.g., '2b', '3f', '1b')
-    - working_dir (str): Absolute path where to create the project
+    - bug_id (str): Bug ID (e.g., '2', '3', '4') - will be converted to '2b', '3b', etc.
+    - checkout_dir (str): Base directory where all Defects4J checkouts are stored
+                              (e.g., '/path/to/defects4j_programs')
     
     Returns:
-    - bool: True if checkout successful, False otherwise
+    - tuple: (success: bool, working_dir: str) where working_dir is the full path to the checkout
     """
+    # Construct the checkout directory name: {project_name.lower()}{bug_id}
+    checkout_dir_name = f"{project_name.lower()}{bug_id}"
+    working_dir = os.path.join(checkout_dir, checkout_dir_name)
+    
+    # Check if directory already exists and is a valid Defects4J checkout
+    if os.path.exists(working_dir):
+        # Verify it's a valid Defects4J checkout by checking for .defects4j.config
+        config_file = os.path.join(working_dir, '.defects4j.config')
+        if os.path.exists(config_file):
+            print(f"Using existing checkout at {working_dir}")
+            return True, working_dir
+        else:
+            print(f"Directory {working_dir} exists but is not a valid Defects4J checkout. Removing and re-checking out...")
+            shutil.rmtree(working_dir)
+    
+    # Directory doesn't exist, so checkout
     try:
+        print(f"Checking out Defects4J project {project_name} {bug_id} to {working_dir}...")
         # Run the checkout command with Java 11 environment
         result = subprocess.run(
-            ['defects4j', 'checkout', '-p', project_name, '-v', version + 'b', '-w', working_dir],
+            ['defects4j', 'checkout', '-p', project_name, '-v', bug_id + 'b', '-w', working_dir],
             capture_output=True,
             text=True,
             env=_get_java11_env()
         )
         
         if result.returncode == 0:
-            return True
+            print(f"✓ Checked out to {working_dir}")
+            return True, working_dir
         else:
             print(f"Failed to checkout project: {result.stderr}")
-            return False
+            return False, working_dir
             
     except Exception as e:
         print(f"Error during checkout: {e}")
-        return False
+        return False, working_dir
 
 
 # Replace a buggy file (target_file_path) with the patched program (java_file)

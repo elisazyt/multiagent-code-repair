@@ -12,10 +12,12 @@ The user cannot modify your code, so do not suggest incomplete code which requir
 Suggest the full code instead of partial code or code changes.
 
 RETURN FORMAT:
-For every single bug location, return the patch for the entire buggy node in markdown format, with the following syntax:
+For every single bug location, return the patch for the entire buggy node in markdown format, enclosed in the following syntax:
 ```java
-[patch]
+
 ```
+Additionally, briefly explain your reasoning for the patch.
+
 Do not use markdown format for anything that is not a patch. Only use markdown format for the patches.
 The number of markdown blocks should equal the number of bug locations.
 The patch should contain the full code for the bug location.

@@ -2,8 +2,20 @@ import subprocess
 import os
 import re
 import json
+import sys
 from typing import Optional, Tuple, List
+
+# Add current directory to path for local imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, current_dir)
+
 import retrieval_utils as utils
+import isolate_bug as ib
+
+# Add test_suites to path for checkout function
+import sys
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'test_suites'))
+import test_suites_helpers as tsh
 
 
 # TODO: improve CFG by providing list of nodes and edges and consider more than 1-hop distance. additionally,
@@ -31,51 +43,98 @@ class JoernSession:
         self.project_name = None
 
 
-    def create_cpg(self, project_path: str, project_name: str) -> bool:
+    def create_cpg_from_defects4j(self, project_name: str, bug_id: str, 
+                                   checkout_dir: str,
+                                   joern_github_dir: str) -> bool:
         """
-        Create and save a CPG for a given project
+        Create a CPG for an entire Defects4J project using javasrc2cpg.
+        Automatically checks out the project if it doesn't exist.
         
         Args:
-            project_path: Path to the source code directory/file
-            project_name: Name for the Joern project
+            project_name: Defects4J project name (e.g., "Closure", "Chart")
+            bug_id: Bug ID (e.g., "4", "2")
+            checkout_dir: Base directory where Defects4J checkouts are stored
+            joern_github_dir: Path to the root directory where Joern was cloned from GitHub
             
         Returns:
             True if successful, False otherwise
         """
         try:
-            # Set project name immediately
-            self.project_name = project_name
+            # Set project name for CPG
+            cpg_project_name = f"{project_name}{bug_id}"
+            self.project_name = cpg_project_name
             
-            # Ensure the main workspace directory exists
-            os.makedirs(self.joern_directory, exist_ok=True)
+            # Derive javasrc2cpg path from GitHub clone directory
+            javasrc2cpg_path = os.path.join(joern_github_dir, 'joern-cli', 'javasrc2cpg')
             
-            # Commands to import code and save CPG
-            commands = [
-                f'importCode(inputPath="{project_path}", projectName="{project_name}")',
-                'save'
-            ]
-            
-            # Run Joern with the commands from the main workspace directory
-            process = subprocess.Popen(
-                [self.joern_executable],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=self.joern_directory
-            )
-            
-            command_string = "\n".join(commands) + "\n"
-            stdout, stderr = process.communicate(input=command_string)
-            
-            if process.returncode != 0:
-                print(f"Error creating CPG: {stderr}")
+            # Validate javasrc2cpg exists
+            if not os.path.exists(javasrc2cpg_path):
+                print(f"ERROR: javasrc2cpg not found at {javasrc2cpg_path}")
+                print(f"  Expected location: {joern_github_dir}/joern-cli/javasrc2cpg")
                 return False
             
+            # Checkout Defects4J project (will skip if already exists)
+            success, defects4j_working_dir = tsh.checkout_defects4j_project(
+                project_name, bug_id, checkout_dir
+            )
+            if not success:
+                print(f"ERROR: Failed to checkout Defects4J project")
+                return False
+            
+            # Export classpath from Defects4J project
+            print("Exporting classpath...")
+            cp_result = subprocess.run(
+                ['defects4j', 'export', '-p', 'cp.compile'],
+                cwd=defects4j_working_dir,
+                capture_output=True,
+                text=True,
+                env=tsh._get_java11_env()
+            )
+            
+            if cp_result.returncode != 0:
+                print(f"Failed to export classpath: {cp_result.stderr}")
+                return False
+            
+            classpath = cp_result.stdout.strip()
+            print(f"✓ Classpath: {classpath[:100]}...")  # Print first 100 chars
+            
+            # Create output directory
+            output_dir = os.path.join(self.joern_directory, 'workspace', cpg_project_name)
+            os.makedirs(output_dir, exist_ok=True)
+            output_path = os.path.join(output_dir, 'cpg.bin.zip')
+            
+            # Run javasrc2cpg
+            print(f"Creating CPG using javasrc2cpg...")
+            print(f"  Input: {defects4j_working_dir}")
+            print(f"  Output: {output_path}")
+            
+            javasrc2cpg_cmd = [
+                javasrc2cpg_path,
+                defects4j_working_dir,
+                '--inference-jar-paths', classpath,
+                '--output', output_path
+            ]
+            
+            result = subprocess.run(
+                javasrc2cpg_cmd,
+                capture_output=True,
+                text=True,
+                env=tsh._get_java11_env()
+            )
+            
+            if result.returncode != 0:
+                print(f"Error creating CPG with javasrc2cpg:")
+                print(f"  stdout: {result.stdout}")
+                print(f"  stderr: {result.stderr}")
+                return False
+            
+            print(f"✓ CPG created successfully at {output_path}")
             return True
             
         except Exception as e:
-            print(f"Error creating CPG: {e}")
+            print(f"Error creating CPG from Defects4J: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
 
@@ -91,7 +150,7 @@ class JoernSession:
         """
         try:
             # Construct the path to the CPG file
-            cpg_path = f"{self.joern_directory}/workspace/{project_name}/cpg.bin"
+            cpg_path = f"{self.joern_directory}/workspace/{project_name}/cpg.bin.zip"
             
             # Check if the CPG file exists
             if not os.path.exists(cpg_path):
@@ -105,6 +164,78 @@ class JoernSession:
             print(f"Error setting CPG path: {e}")
             return False
 
+
+    def get_functions_in_buggy_class(self, line_numbers: Tuple[int, int]) -> List[str]:
+        """
+        Get all functions in the buggy class.
+        
+        Args:
+            line_numbers: Tuple of (start_line, end_line) to search
+            
+        Returns:
+            List of function signatures
+        """
+        # Step 1: Use tree-sitter to find the class containing the bug
+        class_node = ib.retrieve_buggy_class(self.java_file_path, line_numbers)
+        if class_node:
+            # Extract class name from tree-sitter node
+            class_name = ib.extract_class_name_from_node(class_node, self.java_file_path)
+            print("class name:", class_name)
+            
+            # Step 2: Use class name in Joern query
+            query = f'cpg.typeDecl.name("{class_name}").method.map(m => (m.name, m.fullName)).toJson'
+            stdout, stderr = self._run_joern_query(query)
+            if not stdout:
+                return []
+            
+            try:
+                # Extract JSON string from Joern output
+                lines = stdout.strip().split('\n')
+                json_str = None
+                for line in lines:
+                    # Strip ANSI color codes
+                    line_clean = re.sub(r'\x1b\[[0-9;]*m', '', line)
+                    # Look for the JSON output line
+                    if 'val res' in line_clean and 'String = ' in line_clean:
+                        # Extract the JSON string from the output
+                        json_start = line_clean.find('String = ') + 8
+                        json_str = line_clean[json_start:].strip()
+                        # Remove any extra quotes at the beginning and end
+                        while (json_str.startswith('"') and json_str.endswith('"')) or (json_str.startswith("'") and json_str.endswith("'")):
+                            json_str = json_str[1:-1]
+                        # Handle escaped quotes
+                        json_str = json_str.replace('\\"', '"')
+                        break
+                
+                if not json_str:
+                    return []
+                
+                # Parse the JSON
+                data = json.loads(json_str)
+                
+                # If data is still a string, try parsing it again
+                if isinstance(data, str):
+                    data = json.loads(data)
+                
+                # Extract method full names from the list of dicts
+                # Format: [{"methodName": "fullName"}, ...]
+                method_signatures = []
+                if isinstance(data, list):
+                    for item in data:
+                        if isinstance(item, dict):
+                            # Each dict has one key-value pair: {methodName: fullName}
+                            method_signatures.extend(item.values())
+                
+                return method_signatures
+                
+            except json.JSONDecodeError as e:
+                print(f"Error parsing JSON: {e}")
+                return []
+            except Exception as e:
+                print(f"Error processing output: {e}")
+                return []
+        
+        return []
 
 
     def get_method_signature_from_line_numbers(self, line_numbers: Tuple[int, int]) -> Optional[str]:
@@ -175,6 +306,64 @@ class JoernSession:
             print(f"Error processing output: {e}")
             return None
     
+
+    # Assume that there is only one variable with the given name within the buggy line range
+    def get_buggy_variable_type(self, var_name, line_numbers: Tuple[int, int]) -> Optional[str]:
+        """
+        Get the type of the buggy variable.
+        
+        Args:
+            var_name: Name of the variable to find
+            line_numbers: Tuple of (start_line, end_line) to search
+        """
+        # Get the class name to filter by file
+        class_node = ib.retrieve_buggy_class(self.java_file_path, line_numbers)
+        class_name = ib.extract_class_name_from_node(class_node, self.java_file_path)
+        
+        start_line, end_line = line_numbers
+        # Filter by class name first (to limit to the correct file), then filter identifiers by line number
+        query = f'cpg.typeDecl.name("{class_name}").ast.isIdentifier.filter(i => i.name == "{var_name}" && i.lineNumber.isDefined && i.lineNumber.get >= {start_line} && i.lineNumber.get <= {end_line}).typeFullName.l'
+        
+        stdout, stderr = self._run_joern_query(query)
+        if not stdout:
+            return None
+        
+        try:
+            # Extract the list from Joern output
+            # Look for lines with "val resX: List[String] = List(" and collect all quoted strings
+            lines = stdout.strip().split('\n')
+            
+            # Find the line with "List(" and collect all quoted strings from subsequent lines
+            found_list = False
+            quoted_strings = []
+            
+            for line in lines:
+                line_clean = re.sub(r'\x1b\[[0-9;]*m', '', line)
+                
+                # Check if this is the start of the list
+                if 'val res' in line_clean and 'List[String]' in line_clean and 'List(' in line_clean:
+                    found_list = True
+                
+                # If we're inside the list, extract all quoted strings
+                if found_list:
+                    # Find all quoted strings in this line
+                    matches = re.findall(r'"([^"]+)"', line_clean)
+                    quoted_strings.extend(matches)
+                    
+                    # Stop when we find the closing parenthesis (end of list)
+                    # But only if we've already found some content (to avoid stopping on the opening line)
+                    if ')' in line_clean and found_list and quoted_strings:
+                        break
+            
+            # Return the first quoted string if any were found
+            if quoted_strings:
+                return quoted_strings[0]
+            
+            return None
+        except Exception as e:
+            print(f"Error parsing variable type: {e}")
+            return None
+
 
 
     def get_callees_in_line_range(self, line_numbers: Tuple[int, int]) -> List[Tuple[str, int, str]]:
@@ -367,13 +556,23 @@ class JoernSession:
             raise RuntimeError("No project loaded. Call load_cpg() first.")
         
         try:
-            # Use open() to load existing project - this doesn't overwrite the CPG
-            # open(projectName) opens the existing project and makes it active
-            # This is safer than importCpg() which can overwrite/corrupt the CPG
             if not self.project_name:
                 raise RuntimeError("Project name not set. Call load_cpg() first.")
             
-            load_command = f'open("{self.project_name}")'
+            # Check if project.json exists (project already imported) or if we have a zip file
+            cpg_zip_path = f"{self.joern_directory}/workspace/{self.project_name}/cpg.bin.zip"
+            project_json_path = f"{self.joern_directory}/workspace/{self.project_name}/project.json"
+            
+            # If project.json exists, use open() (project already imported)
+            # If only zip exists, use importCpg() to import it
+            if os.path.exists(project_json_path):
+                load_command = f'open("{self.project_name}")'
+            elif os.path.exists(cpg_zip_path):
+                # Import the zip file - Joern will derive project name from path
+                load_command = f'importCpg("{cpg_zip_path}")'
+            else:
+                raise RuntimeError(f"CPG not found for project {self.project_name}")
+            
             commands = f"{load_command}\n{query}\n"
             
             # Run in a new process

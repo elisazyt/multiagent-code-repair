@@ -213,3 +213,102 @@ def mark_failing_line_in_method(method_code: str, failing_line_number: int, meth
 
 # TODO: Implement data flow analysis functions
 
+
+
+# Get all available instance methods in the buggy class
+def get_all_methods_in_class(java_file_path: str, class_name: str) -> List[Tuple[str, str, List[Tuple[str, str]], int]]:
+    """
+    Get all methods in a class with their full signatures.
+    
+    Args:
+        java_file_path: Path to the Java file
+        class_name: Name of the class to search for
+        
+    Returns:
+        List of tuples: (method_name, return_type, parameters, line_number)
+        where parameters is a list of (param_type, param_name) tuples
+    """
+    try:
+        with open(java_file_path, 'rb') as f:
+            code = f.read()
+        
+        tree = parser.parse(code)
+        
+        # First, find the class by name
+        class_query = Query(JAVA_LANGUAGE, """
+        (class_declaration
+            name: (identifier) @class_name)
+        """)
+        
+        class_matches = class_query.matches(tree.root_node)
+        target_class_node = None
+        
+        for match in class_matches:
+            pattern_id, captures_dict = match
+            if 'class_name' in captures_dict:
+                found_class_name = get_node_text(captures_dict['class_name'][0], code)
+                if found_class_name == class_name:
+                    # Get the parent class_declaration node
+                    target_class_node = captures_dict['class_name'][0].parent
+                    while target_class_node and target_class_node.type != 'class_declaration':
+                        target_class_node = target_class_node.parent
+                    break
+        
+        if not target_class_node:
+            return []
+        
+        # Now find all methods within this class (search in class body)
+        methods = []
+        method_query = Query(JAVA_LANGUAGE, """
+        (method_declaration
+            type: (_) @return_type
+            name: (identifier) @method_name
+            parameters: (formal_parameters) @params)
+        """)
+        
+        # Search within the class node (recursively)
+        method_matches = method_query.matches(target_class_node)
+        
+        for match in method_matches:
+            pattern_id, captures_dict = match
+            
+            # Get method name
+            method_name_node = captures_dict.get('method_name', [None])[0]
+            if not method_name_node:
+                continue
+            method_name = get_node_text(method_name_node, code)
+            
+            # Get return type
+            return_type_node = captures_dict.get('return_type', [None])[0]
+            return_type = get_node_text(return_type_node, code) if return_type_node else "void"
+            
+            # Get parameters
+            params_node = captures_dict.get('params', [None])[0]
+            parameters = []
+            if params_node:
+                # Extract individual parameters
+                param_query = Query(JAVA_LANGUAGE, """
+                (formal_parameter
+                    type: (_) @param_type
+                    name: (identifier) @param_name)
+                """)
+                param_matches = param_query.matches(params_node)
+                for param_match in param_matches:
+                    param_pattern, param_captures = param_match
+                    param_type_node = param_captures.get('param_type', [None])[0]
+                    param_name_node = param_captures.get('param_name', [None])[0]
+                    if param_type_node and param_name_node:
+                        param_type = get_node_text(param_type_node, code)
+                        param_name = get_node_text(param_name_node, code)
+                        parameters.append((param_type, param_name))
+            
+            # Get line number (1-based)
+            line_number = method_name_node.start_point[0] + 1
+            
+            methods.append((method_name, return_type, parameters, line_number))
+        
+        return methods
+        
+    except Exception as e:
+        print(f"Error getting methods in class: {e}")
+        return []

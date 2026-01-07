@@ -56,6 +56,40 @@ def retrieve_buggy_node(java_file_path: str, bug_location: Tuple[int, int]) -> T
         return None
 
 
+def extract_class_name_from_node(class_node: Node, java_file_path: str) -> str:
+    """
+    Extract the class name from a class_declaration node.
+    
+    Args:
+        class_node: Tree-sitter class_declaration node
+        java_file_path: Path to the Java file (needed to read code)
+        
+    Returns:
+        str: The class name, or None if extraction fails
+    """
+    try:
+        with open(java_file_path, 'rb') as f:
+            code = f.read()
+        
+        # Use query to find class name (more precise than iterating children)
+        query = Query(JAVA_LANGUAGE, """
+        (class_declaration
+            name: (identifier) @class_name)
+        """)
+        
+        matches = query.matches(class_node)
+        for match in matches:
+            pattern_id, captures_dict = match
+            if 'class_name' in captures_dict:
+                class_name_node = captures_dict['class_name'][0]
+                return utils.get_node_text(class_name_node, code)
+        
+        return None
+        
+    except Exception as e:
+        print(f"Error extracting class name: {e}")
+        return None
+
 
 ########################################################################################
 # HELPER METHODS
@@ -111,7 +145,8 @@ def retrieve_buggy_method_or_constructor(java_file_path: str, bug_location: Tupl
 
 def retrieve_buggy_class(java_file_path: str, bug_location: Tuple[int, int]) -> Node:
     """
-    Retrieve the class declaration node that contains the buggy lines of code.
+    Retrieve the outermost class declaration node that contains the buggy lines of code.
+    If the bug is in a nested class, returns the outer class (needed for Joern queries).
     Assumes the start and end line both fall within the range of a class_declaration node.
     """
     try:
@@ -131,7 +166,8 @@ def retrieve_buggy_class(java_file_path: str, bug_location: Tuple[int, int]) -> 
         
         matches = query.matches(tree.root_node)
         
-        # Check each class to see if it contains the bug location
+        # Collect all classes that contain the bug location
+        matching_classes = []
         for match in matches:
             pattern_id, captures_dict = match
             class_nodes = captures_dict.get('class', [])
@@ -143,7 +179,15 @@ def retrieve_buggy_class(java_file_path: str, bug_location: Tuple[int, int]) -> 
                 
                 # Check if bug location falls within this class's range
                 if class_start <= start_line and end_line <= class_end:
-                    return class_node
+                    # Store class node with its line range size
+                    class_range_size = class_end - class_start
+                    matching_classes.append((class_node, class_range_size))
+        
+        # Return the outermost class (largest line range)
+        if matching_classes:
+            # Sort by range size (largest first) and return the outermost
+            outermost_class = max(matching_classes, key=lambda x: x[1])
+            return outermost_class[0]  # Return the node, not the tuple
         
         return None
         
