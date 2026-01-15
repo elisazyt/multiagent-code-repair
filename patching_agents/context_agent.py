@@ -9,6 +9,8 @@ import retrieval_utils as utils
 from joern_callgraph import JoernSession
 from info_dict import InfoDict
 
+# TODO: update instance variables to reflect changes in how JoernSession is initialized and used
+
 class ContextAgent(PatchingAgent):
 
     def __init__(self, information: InfoDict, agent_role: str, agent_task: str):

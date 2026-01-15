@@ -9,10 +9,10 @@ import isolate_bug as ib
 import retrieval_utils as utils
 from joern_callgraph import JoernSession
 
-# Get paths from environment variables with fallbacks
-JOERN_EXECUTABLE = os.getenv('JOERN_EXECUTABLE', '/usr/local/bin/joern')
-JOERN_DIRECTORY = os.getenv('JOERN_DIRECTORY', '/usr/local/share/joern')
-JAVA_FILE_PATH = os.getenv('JAVA_FILE_PATH', 'test_programs/test_program.java')
+# Get paths from environment variables
+JOERN_EXECUTABLE = os.getenv('JOERN_EXECUTABLE')
+JOERN_DIRECTORY = os.getenv('JOERN_DIRECTORY')
+JAVA_FILE_PATH = os.getenv('JAVA_FILE_PATH')
 
 
 # TODO: how much context to provide? is whole node enough, or do we provide the whole node + the program

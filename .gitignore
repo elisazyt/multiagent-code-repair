@@ -8,3 +8,4 @@ faiss_test/
 message_histories/
 patches/
 workspace/
+autogen_test/
