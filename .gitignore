@@ -9,3 +9,4 @@ message_histories/
 patches/
 workspace/
 autogen_test/
+autogen_chatcontext/

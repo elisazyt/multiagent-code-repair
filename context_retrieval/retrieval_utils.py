@@ -155,29 +155,29 @@ def retrieve_method_by_name(java_file_path: str, method_name: str) -> Node:
         
         tree = parser.parse(code)
         
-        # Query for method declarations
-        query = Query(JAVA_LANGUAGE, """
-        (method_declaration
-            name: (identifier) @method_name)
-        """)
+        # Manual traversal to find method_declaration nodes
+        def find_method(node):
+            if node.type == 'method_declaration':
+                # In method_declaration, the structure is typically:
+                # method_declaration -> modifiers? -> type -> identifier (method name) -> formal_parameters -> body
+                # We need to find the identifier that comes after the type
+                found_identifier = False
+                for child in node.children:
+                    if child.type == 'identifier':
+                        # This should be the method name (comes after modifiers and type)
+                        found_name = code[child.start_byte:child.end_byte].decode('utf8')
+                        if found_name == method_name:
+                            return node
+            
+            # Recursively search children
+            for child in node.children:
+                result = find_method(child)
+                if result:
+                    return result
+            
+            return None
         
-        matches = query.matches(tree.root_node)
-        
-        for match in matches:
-            pattern_id, captures_dict = match
-            if 'method_name' in captures_dict:
-                method_name_node = captures_dict['method_name'][0]
-                found_name = get_node_text(method_name_node, code)
-                
-                if found_name == method_name:
-                    # Get the parent method_declaration node
-                    current = method_name_node.parent
-                    while current and current.type != 'method_declaration':
-                        current = current.parent
-                    if current:
-                        return current
-        
-        return None
+        return find_method(tree.root_node)
         
     except Exception as e:
         print(f"Error retrieving method by name: {e}")

@@ -25,6 +25,7 @@ API database (complete):
     - Agent explanation for why the APIs might be useful
 
 Test suites (complete):
+- Users must have Defects4J installed and configured (DEFECTS4J_HOME environment variable should be set per Defects4J installation instructions)
 - Runs tests:
     - Input: Bug project and ID, working directory to check out the project and run the test, path(s) to the patch file(s)
     - Output: List of failing tests for each buggy function

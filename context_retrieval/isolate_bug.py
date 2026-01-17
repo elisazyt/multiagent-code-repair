@@ -71,18 +71,11 @@ def extract_class_name_from_node(class_node: Node, java_file_path: str) -> str:
         with open(java_file_path, 'rb') as f:
             code = f.read()
         
-        # Use query to find class name (more precise than iterating children)
-        query = Query(JAVA_LANGUAGE, """
-        (class_declaration
-            name: (identifier) @class_name)
-        """)
-        
-        matches = query.matches(class_node)
-        for match in matches:
-            pattern_id, captures_dict = match
-            if 'class_name' in captures_dict:
-                class_name_node = captures_dict['class_name'][0]
-                return utils.get_node_text(class_name_node, code)
+        # Find the identifier child which is the class name
+        # In class_declaration, the structure is typically: modifiers? class identifier type_parameters? superclass? interfaces? body
+        for child in class_node.children:
+            if child.type == 'identifier':
+                return utils.get_node_text(child, code)
         
         return None
         
@@ -110,27 +103,25 @@ def retrieve_buggy_method_or_constructor(java_file_path: str, bug_location: Tupl
         start_line = start_line - 1
         end_line = end_line - 1
         
-        # Find all method declarations
-        query = Query(JAVA_LANGUAGE, """
-        (method_declaration) @method_or_constructor
-        (constructor_declaration) @method_or_constructor
-        """)
+        # Find all method/constructor declarations by traversing the tree
+        def find_methods_and_constructors(node):
+            results = []
+            if node.type in ('method_declaration', 'constructor_declaration'):
+                results.append(node)
+            for child in node.children:
+                results.extend(find_methods_and_constructors(child))
+            return results
         
-        matches = query.matches(tree.root_node)
+        all_methods = find_methods_and_constructors(tree.root_node)
         
         # Check each method/constructor to see if it contains the bug location
-        for match in matches:
-            pattern_id, captures_dict = match
-            nodes = captures_dict.get('method_or_constructor', [])
+        for node in all_methods:
+            node_start_line = node.start_point[0]  # Line number where method/constructor starts
+            node_end_line = node.end_point[0]      # Line number where method/constructor ends
             
-            if nodes:
-                node = nodes[0]
-                node_start_line = node.start_point[0]  # Line number where method/constructor starts
-                node_end_line = node.end_point[0]      # Line number where method/constructor ends
-                
-                # Check if bug location falls within this method/constructor's range
-                if node_start_line <= start_line and end_line <= node_end_line:
-                    return node
+            # Check if bug location falls within this method/constructor's range
+            if node_start_line <= start_line and end_line <= node_end_line:
+                return node
         
         return None
         
@@ -159,29 +150,28 @@ def retrieve_buggy_class(java_file_path: str, bug_location: Tuple[int, int]) -> 
         start_line = start_line - 1
         end_line = end_line - 1
         
-        # Find all class declarations
-        query = Query(JAVA_LANGUAGE, """
-        (class_declaration) @class
-        """)
+        # Find all class declarations by traversing the tree
+        def find_classes(node):
+            results = []
+            if node.type == 'class_declaration':
+                results.append(node)
+            for child in node.children:
+                results.extend(find_classes(child))
+            return results
         
-        matches = query.matches(tree.root_node)
+        all_classes = find_classes(tree.root_node)
         
         # Collect all classes that contain the bug location
         matching_classes = []
-        for match in matches:
-            pattern_id, captures_dict = match
-            class_nodes = captures_dict.get('class', [])
+        for class_node in all_classes:
+            class_start = class_node.start_point[0]  # Line number where class starts
+            class_end = class_node.end_point[0]      # Line number where class ends
             
-            if class_nodes:
-                class_node = class_nodes[0]
-                class_start = class_node.start_point[0]  # Line number where class starts
-                class_end = class_node.end_point[0]      # Line number where class ends
-                
-                # Check if bug location falls within this class's range
-                if class_start <= start_line and end_line <= class_end:
-                    # Store class node with its line range size
-                    class_range_size = class_end - class_start
-                    matching_classes.append((class_node, class_range_size))
+            # Check if bug location falls within this class's range
+            if class_start <= start_line and end_line <= class_end:
+                # Store class node with its line range size
+                class_range_size = class_end - class_start
+                matching_classes.append((class_node, class_range_size))
         
         # Return the outermost class (largest line range)
         if matching_classes:

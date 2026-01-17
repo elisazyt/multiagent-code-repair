@@ -26,6 +26,14 @@ The patch should contain the full code for the bug location.
 
 BASIC_PROMPT = "Carry out the given task given by the system description."
 
+# TODO: placeholder, add actual COT prompt later
+COT_PROMPT = f"""
+You are a highly skilled software engineer with expertise in debugging and patching programs.
+    Carry out the task by generating a patch for the buggy code. Carefully read the code to understand its purpose and
+    logic, then identify issues that could cause the code to fail or produce incorrect results. Rewrite the code,
+    correcting the identified bugs, and add detailed comments explaining the changes you made and why they address the
+    issues.
+"""
 
 API_PROMPT = f"""
 You are an agent that retrieves and uses any necessary APIs to carry out the task given by the system

@@ -15,22 +15,24 @@ class PatchingResponse:
     # patcher_id is the id of the agent that generated the patch
     patcher_id: str
     # result is the agent response
-    response: str
+    result: str
+    # mapping is the mapping of (modified_source_name, patch_file_path) to send to the testing agent
+    mapping: dict[str, str]
     # TODO: add patch directory to send to testing agent
 
 @dataclass
 class TestingTask:
     # patcher_id is the id of the PatchingAgent whose patch is being tested (i.e., "basic", "cot")
     patcher_id: str
-    # message is the prompt for the testing agent
-    message: str
+    # TODO: check to confirm this is true
+    # mapping is the mapping of (modified_source_name, patch_file_path)
+    mapping: dict[str, str]
 
 @dataclass
 class TestingResponse:
     # patcher_id is the id of the PatchingAgent whose patch was tested (i.e., "basic", "cot")
     patcher_id: str
-    # success is a boolean indicating if the test ran successfully
-    # 0 if test failed, 1 if test passed, 2 if test didn't run/compile
-    success: int
-    # result is the testing result if the test ran successfully
+    # success is a bool: True if all tests passed, False if tests failed or didn't run/compile
+    success: bool
+    # result is the testing result message
     result: str
