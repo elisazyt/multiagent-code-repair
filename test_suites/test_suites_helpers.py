@@ -19,22 +19,87 @@ def connect_paths(project_name: str, working_dir: str, paths: dict[str, str], pa
 ########################
 
 def _get_java11_env():
-    """Get environment with Java 11 for Defects4J."""
+    """Get environment with Java 11 for Defects4J.
+    
+    Returns:
+        Environment dict with Java 11 and Defects4J variables set.
+    
+    Raises:
+        ValueError: If DEFECTS4J_HOME is not set in the environment.
+    """
     env = os.environ.copy()
+    
+    # Check for DEFECTS4J_HOME
+    if 'DEFECTS4J_HOME' not in env:
+        raise ValueError("DEFECTS4J_HOME environment variable is not set. Please set it according to Defects4J installation instructions.")
+    
+    # Set PERL5LIB to include Defects4J's core directory
+    defects4j_home = env['DEFECTS4J_HOME']
+    perl5lib = os.path.join(defects4j_home, 'core')
+    existing_perl5lib = env.get('PERL5LIB', '')
+    if existing_perl5lib:
+        env['PERL5LIB'] = f"{perl5lib}:{existing_perl5lib}"
+    else:
+        env['PERL5LIB'] = perl5lib
+    
+    # Set Java 11
     try:
         java11_path = subprocess.run(['/usr/libexec/java_home', '-v', '11'], capture_output=True, text=True, check=True).stdout.strip()
         env['JAVA_HOME'] = java11_path
-        # Prepend Java 11 to PATH, preserving existing PATH (which should include defects4j)
         existing_path = env.get('PATH', '')
         env['PATH'] = f"{java11_path}/bin:{existing_path}"
     except:
         pass  # Fallback to default if Java 11 not found
+    
     return env
 
 
-def checkout_defects4j_project(project_name: str, bug_id: str, checkout_dir: str):
+def reset_checkout(project_name: str, bug_id: str, checkout_dir: str) -> bool:
+    """
+    Force reset a Defects4J checkout by deleting and re-checking out.
+    
+    Parameters:
+    - project_name (str): Project name (e.g., 'Chart', 'Closure', 'Lang')
+    - bug_id (str): Bug ID (e.g., '2', '3', '4')
+    - checkout_dir (str): Base directory where all Defects4J checkouts are stored
+    
+    Returns:
+    - bool: True if reset succeeded, False otherwise
+    """
+    working_dir = os.path.join(checkout_dir, f"{project_name.lower()}{bug_id}")
+    
+    # Delete existing checkout if it exists
+    if os.path.exists(working_dir):
+        print(f"Resetting checkout: deleting {working_dir}...")
+        shutil.rmtree(working_dir)
+    
+    # Re-checkout
+    try:
+        print(f"Re-checking out Defects4J project {project_name} {bug_id} to {working_dir}...")
+        result = subprocess.run(
+            ['defects4j', 'checkout', '-p', project_name, '-v', bug_id + 'b', '-w', working_dir],
+            capture_output=True,
+            text=True,
+            env=_get_java11_env()
+        )
+        
+        if result.returncode == 0:
+            print(f"✓ Reset and checked out to {working_dir}")
+            return True
+        else:
+            print(f"Failed to re-checkout project: {result.stderr}")
+            return False
+            
+    except Exception as e:
+        print(f"Error during reset checkout: {e}")
+        return False
+
+
+def checkout_defects4j_project(project_name: str, bug_id: str, checkout_dir: str) -> bool:
     """Checkout the buggy version of a Defects4J project.
-    If the directory already exists, skips checkout.
+    If the directory already exists and is valid, reuses it.
+    Note: We don't check compilation here - that's only done when running tests.
+    If a test run fails with a compile error, the checkout should be reset at that point.
     
     Parameters:
     - project_name (str): Project name (e.g., 'Chart', 'Closure', 'Lang')
@@ -43,7 +108,7 @@ def checkout_defects4j_project(project_name: str, bug_id: str, checkout_dir: str
                               (e.g., '/path/to/defects4j_programs')
     
     Returns:
-    - tuple: (success: bool, working_dir: str) where working_dir is the full path to the checkout
+    - bool: True if checkout succeeded or already exists, False otherwise
     """
     # Construct the checkout directory name: {project_name.lower()}{bug_id}
     checkout_dir_name = f"{project_name.lower()}{bug_id}"
@@ -55,7 +120,7 @@ def checkout_defects4j_project(project_name: str, bug_id: str, checkout_dir: str
         config_file = os.path.join(working_dir, '.defects4j.config')
         if os.path.exists(config_file):
             print(f"Using existing checkout at {working_dir}")
-            return True, working_dir
+            return True
         else:
             print(f"Directory {working_dir} exists but is not a valid Defects4J checkout. Removing and re-checking out...")
             shutil.rmtree(working_dir)
@@ -73,14 +138,14 @@ def checkout_defects4j_project(project_name: str, bug_id: str, checkout_dir: str
         
         if result.returncode == 0:
             print(f"✓ Checked out to {working_dir}")
-            return True, working_dir
+            return True
         else:
             print(f"Failed to checkout project: {result.stderr}")
-            return False, working_dir
+            return False
             
     except Exception as e:
         print(f"Error during checkout: {e}")
-        return False, working_dir
+        return False
 
 
 # Replace a buggy file (target_file_path) with the patched program (java_file)
@@ -186,8 +251,8 @@ def get_each_failing_test_info(failing_tests: list[str], failing_tests_info: str
         start_index = failing_tests_info.find(start_marker)
         
         if start_index == -1:
-            # Test info not found, add empty dict
-            all_info.append({test_identifier: ""})
+            # Test info not found, add empty string
+            info_for_each_test[test_identifier] = ""
             continue
         
         # Find the end of this test's info (next "---" or end of string)

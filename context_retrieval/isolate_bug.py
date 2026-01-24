@@ -84,6 +84,33 @@ def extract_class_name_from_node(class_node: Node, java_file_path: str) -> str:
         return None
 
 
+def extract_class_name_from_file(java_file_path: str, line_numbers: Tuple[int, int]) -> str:
+    """
+    Extract class name from a Java file using tree-sitter at the given line numbers.
+    Assumes the code is inside a class (standard Java).
+    
+    Args:
+        java_file_path: Path to the Java file
+        line_numbers: Tuple of (start_line, end_line) where the code is located
+        
+    Returns:
+        Class name (e.g., "CategoryPlot")
+        
+    Raises:
+        ValueError: If class name cannot be extracted
+    """
+    bug_location = line_numbers
+    class_node = retrieve_buggy_class(java_file_path, bug_location)
+    if not class_node:
+        raise ValueError(f"Could not find class node for {java_file_path} at lines {line_numbers}")
+    
+    class_name = extract_class_name_from_node(class_node, java_file_path)
+    if not class_name:
+        raise ValueError(f"Could not extract class name from class node in {java_file_path} at lines {line_numbers}")
+    
+    return class_name
+
+
 ########################################################################################
 # HELPER METHODS
 ########################################################################################
@@ -116,12 +143,12 @@ def retrieve_buggy_method_or_constructor(java_file_path: str, bug_location: Tupl
         
         # Check each method/constructor to see if it contains the bug location
         for node in all_methods:
-            node_start_line = node.start_point[0]  # Line number where method/constructor starts
-            node_end_line = node.end_point[0]      # Line number where method/constructor ends
-            
-            # Check if bug location falls within this method/constructor's range
-            if node_start_line <= start_line and end_line <= node_end_line:
-                return node
+                node_start_line = node.start_point[0]  # Line number where method/constructor starts
+                node_end_line = node.end_point[0]      # Line number where method/constructor ends
+                
+                # Check if bug location falls within this method/constructor's range
+                if node_start_line <= start_line and end_line <= node_end_line:
+                    return node
         
         return None
         
@@ -164,14 +191,14 @@ def retrieve_buggy_class(java_file_path: str, bug_location: Tuple[int, int]) -> 
         # Collect all classes that contain the bug location
         matching_classes = []
         for class_node in all_classes:
-            class_start = class_node.start_point[0]  # Line number where class starts
-            class_end = class_node.end_point[0]      # Line number where class ends
-            
-            # Check if bug location falls within this class's range
-            if class_start <= start_line and end_line <= class_end:
-                # Store class node with its line range size
-                class_range_size = class_end - class_start
-                matching_classes.append((class_node, class_range_size))
+                class_start = class_node.start_point[0]  # Line number where class starts
+                class_end = class_node.end_point[0]      # Line number where class ends
+                
+                # Check if bug location falls within this class's range
+                if class_start <= start_line and end_line <= class_end:
+                    # Store class node with its line range size
+                    class_range_size = class_end - class_start
+                    matching_classes.append((class_node, class_range_size))
         
         # Return the outermost class (largest line range)
         if matching_classes:

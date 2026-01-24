@@ -69,23 +69,38 @@ def get_comments_before_node(java_file_path: str, node: Node) -> Node:
         (block_comment) @block_comment
         (line_comment) @line_comment
         """)
-                
-        matches = query.matches(tree.root_node)
         
-        # Check each comment node
-        for match in matches:
-            pattern_id, captures_dict = match
-            
-            # Check both block_comment and line_comment captures
+        try:
+            # Try the direct API first (works in some environments)
+            captures = query.captures(tree.root_node)
+            # captures should be a dict: {capture_name: [nodes]}
             for capture_name in ['block_comment', 'line_comment']:
-                if capture_name in captures_dict:
-                    captured_node = captures_dict[capture_name][0]  # Get the first (and only) node
-                    comment_end_point = captured_node.end_point
-                    
-                    # Check for comments on the same line or the line immediately before the target node
-                    if (comment_end_point[0] == node_start_point[0] - 1 or  # Comment on line before
-                        comment_end_point[0] == node_start_point[0]):       # Comment on same line
-                        return captured_node
+                if capture_name in captures:
+                    for captured_node in captures[capture_name]:
+                        comment_end_point = captured_node.end_point
+                        if (comment_end_point[0] == node_start_point[0] - 1 or
+                            comment_end_point[0] == node_start_point[0]):
+                            return captured_node
+        except AttributeError:
+            # If .captures() doesn't exist, manually traverse the tree for comments
+            # This avoids needing QueryCursor
+            def find_comments_before(node, target_line):
+                """Recursively find comment nodes before target line"""
+                comments = []
+                if node.type in ('block_comment', 'line_comment'):
+                    if node.end_point[0] <= target_line:
+                        comments.append(node)
+                for child in node.children:
+                    comments.extend(find_comments_before(child, target_line))
+                return comments
+            
+            all_comments = find_comments_before(tree.root_node, node_start_point[0])
+            # Find the comment closest to (but before) the target node
+            for comment in reversed(all_comments):  # Check from bottom up
+                comment_end_point = comment.end_point
+                if (comment_end_point[0] == node_start_point[0] - 1 or
+                    comment_end_point[0] == node_start_point[0]):
+                    return comment
         
         return None
         
@@ -240,19 +255,36 @@ def get_all_methods_in_class(java_file_path: str, class_name: str) -> List[Tuple
             name: (identifier) @class_name)
         """)
         
-        class_matches = class_query.matches(tree.root_node)
         target_class_node = None
-        
-        for match in class_matches:
-            pattern_id, captures_dict = match
-            if 'class_name' in captures_dict:
-                found_class_name = get_node_text(captures_dict['class_name'][0], code)
-                if found_class_name == class_name:
-                    # Get the parent class_declaration node
-                    target_class_node = captures_dict['class_name'][0].parent
-                    while target_class_node and target_class_node.type != 'class_declaration':
-                        target_class_node = target_class_node.parent
-                    break
+        try:
+            class_captures = class_query.captures(tree.root_node)
+            if 'class_name' in class_captures:
+                for class_name_node in class_captures['class_name']:
+                    found_class_name = get_node_text(class_name_node, code)
+                    if found_class_name == class_name:
+                        # Get the parent class_declaration node
+                        target_class_node = class_name_node.parent
+                        while target_class_node and target_class_node.type != 'class_declaration':
+                            target_class_node = target_class_node.parent
+                        break
+        except AttributeError:
+            # Fall back to manual tree traversal
+            def find_class_by_name(node, target_name):
+                """Recursively find class_declaration node with specific name"""
+                if node.type == 'class_declaration':
+                    # Find the identifier child (class name)
+                    for child in node.children:
+                        if child.type == 'identifier':
+                            found_name = get_node_text(child, code)
+                            if found_name == target_name:
+                                return node
+                            break
+                for child in node.children:
+                    result = find_class_by_name(child, target_name)
+                    if result:
+                        return result
+                return None
+            target_class_node = find_class_by_name(tree.root_node, class_name)
         
         if not target_class_node:
             return []
@@ -267,24 +299,52 @@ def get_all_methods_in_class(java_file_path: str, class_name: str) -> List[Tuple
         """)
         
         # Search within the class node (recursively)
-        method_matches = method_query.matches(target_class_node)
+        method_name_nodes = []
+        try:
+            method_captures = method_query.captures(target_class_node)
+            method_name_nodes = method_captures.get('method_name', [])
+        except AttributeError:
+            # Fall back to manual tree traversal
+            def find_method_names(node):
+                """Recursively find all method_declaration nodes"""
+                methods = []
+                if node.type == 'method_declaration':
+                    # Find the identifier child (method name)
+                    for child in node.children:
+                        if child.type == 'identifier':
+                            methods.append(child)  # Append the identifier node
+                            break
+                for child in node.children:
+                    methods.extend(find_method_names(child))
+                return methods
+            method_name_nodes = find_method_names(target_class_node)
         
-        for match in method_matches:
-            pattern_id, captures_dict = match
-            
-            # Get method name
-            method_name_node = captures_dict.get('method_name', [None])[0]
-            if not method_name_node:
-                continue
+        for method_name_node in method_name_nodes:
             method_name = get_node_text(method_name_node, code)
             
-            # Get return type
-            return_type_node = captures_dict.get('return_type', [None])[0]
-            return_type = get_node_text(return_type_node, code) if return_type_node else "void"
+            # Find the method_declaration parent
+            method_decl = method_name_node.parent
+            while method_decl and method_decl.type != 'method_declaration':
+                method_decl = method_decl.parent
             
-            # Get parameters
-            params_node = captures_dict.get('params', [None])[0]
+            if not method_decl:
+                continue
+            
+            # Extract return type from method_declaration
+            return_type = "void"
+            for child in method_decl.children:
+                if child.type in ('type_identifier', 'scoped_type_identifier', 'generic_type', 'primitive_type', 'void_type'):
+                    return_type = get_node_text(child, code)
+                    break
+            
+            # Extract parameters
             parameters = []
+            params_node = None
+            for child in method_decl.children:
+                if child.type == 'formal_parameters':
+                    params_node = child
+                    break
+            
             if params_node:
                 # Extract individual parameters
                 param_query = Query(JAVA_LANGUAGE, """
@@ -292,14 +352,42 @@ def get_all_methods_in_class(java_file_path: str, class_name: str) -> List[Tuple
                     type: (_) @param_type
                     name: (identifier) @param_name)
                 """)
-                param_matches = param_query.matches(params_node)
-                for param_match in param_matches:
-                    param_pattern, param_captures = param_match
-                    param_type_node = param_captures.get('param_type', [None])[0]
-                    param_name_node = param_captures.get('param_name', [None])[0]
-                    if param_type_node and param_name_node:
-                        param_type = get_node_text(param_type_node, code)
-                        param_name = get_node_text(param_name_node, code)
+                
+                param_name_nodes = []
+                try:
+                    param_captures = param_query.captures(params_node)
+                    param_name_nodes = param_captures.get('param_name', [])
+                except AttributeError:
+                    # Fall back to manual tree traversal
+                    def find_param_names(node):
+                        """Recursively find all formal_parameter identifier nodes"""
+                        params = []
+                        if node.type == 'formal_parameter':
+                            # Find the identifier child (parameter name)
+                            for child in node.children:
+                                if child.type == 'identifier':
+                                    params.append(child)
+                                    break
+                        for child in node.children:
+                            params.extend(find_param_names(child))
+                        return params
+                    param_name_nodes = find_param_names(params_node)
+                
+                # Match param_type and param_name by finding their common parent formal_parameter
+                for param_name_node in param_name_nodes:
+                    param_name = get_node_text(param_name_node, code)
+                    # Find the parent formal_parameter node
+                    param_decl = param_name_node.parent
+                    while param_decl and param_decl.type != 'formal_parameter':
+                        param_decl = param_decl.parent
+                    
+                    if param_decl:
+                        # Find the type within this formal_parameter
+                        param_type = "Object"  # default
+                        for child in param_decl.children:
+                            if child.type in ('type_identifier', 'scoped_type_identifier', 'generic_type', 'primitive_type'):
+                                param_type = get_node_text(child, code)
+                                break
                         parameters.append((param_type, param_name))
             
             # Get line number (1-based)

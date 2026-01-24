@@ -10,6 +10,7 @@ from tree_sitter import Language, Parser, Query
 JAVA_LANGUAGE = Language(tree_sitter_java.language())
 parser = Parser(JAVA_LANGUAGE)
 
+#TODO: split info into multiple dicts for different purposes
 class InfoDict:
     def __init__(self):
         self.info_dict = {}
@@ -116,3 +117,78 @@ class InfoDict:
         except Exception as e:
             print(f"Error extracting modified source name from {java_file_path}: {e}")
             return None
+
+
+class ContextDict:
+    def __init__(self, info_dict: InfoDict = None):
+        self.context_dict = {}
+        # Initialize persistent context storage if it doesn't exist
+        if "retrieved context" not in self.context_dict:
+            self.context_dict["retrieved context"] = []  # List of round summaries
+        if "available context functions" not in self.context_dict:
+            # Dict mapping file_path -> list of available functions for that file
+            self.context_dict["available context functions"] = {}
+        
+        # Default list of all available functions (used when initializing for a new file)
+        # Must match the functions listed in cr_functions.py
+        self._default_functions = [
+            "comment_retrieval",
+            "similar_lines_of_code",
+            "similar_function_name",
+            "all_funcs_in_class",
+            "all_variables_in_class",
+            "one_hop_api_retrieval",
+            "get_callers",
+            "get_callees",
+            "test_failure_check"
+        ]
+
+        self.initialize_from_info_dict(info_dict)
+    
+    def initialize_from_info_dict(self, info_dict: InfoDict = None):
+        """Initialize available functions dict with file paths from InfoDict.
+        
+        Args:
+            info_dict: InfoDict containing bug file information.
+        """
+        
+        bug_files_and_locations = info_dict.get_info("bug files and locations")
+        
+        # Ensure the dict exists in context_dict
+        if "available context functions" not in self.context_dict:
+            self.context_dict["available context functions"] = {}
+        
+        available_functions = self.context_dict["available context functions"]
+        
+        # Initialize each file with default functions
+        for file_path, _, _ in bug_files_and_locations:
+            if file_path not in available_functions:
+                available_functions[file_path] = self._default_functions.copy()
+
+    def get_retrieved_context(self) -> list[str]:
+        """Get the list of round summaries"""
+        return self.context_dict.get("retrieved context", [])
+    
+    def add_retrieved_context_round(self, round_summary: str):
+        """Add a round summary to the retrieved context list (formatted summary string from SummaryAgent)"""
+        if "retrieved context" not in self.context_dict:
+            self.context_dict["retrieved context"] = []
+        self.context_dict["retrieved context"].append(round_summary)
+    
+    def get_available_functions(self) -> dict[str, list[str]]:
+        """Get dict mapping file_path -> list of available context retrieval functions for all files.
+        
+        Returns:
+            Dict mapping file_path -> list of available function names.
+        """
+        available = self.context_dict.get("available context functions", {})
+        return available.copy() if available else {}
+    
+    def remove_function(self, function_name: str, file_path: str):
+        """Remove a function from available list for a specific file (after it's been used)"""
+        available = self.context_dict.get("available context functions", {})
+        if file_path not in available:
+            available[file_path] = self._default_functions.copy()
+        if function_name in available[file_path]:
+            available[file_path].remove(function_name)
+    

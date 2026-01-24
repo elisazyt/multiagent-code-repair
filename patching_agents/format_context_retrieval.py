@@ -82,13 +82,13 @@ def format_callgraph_info(java_file_path: str, bug_location: Tuple[int, int]) ->
 
     result = ''
     result += f'Caller(s) of function:\n'
-    callers = session.get_function_callers(bug_location)
+    callers = session.get_function_callers(java_file_path, bug_location)
     for caller in callers:
         line_number, content = caller
         result += f'    - Line {line_number}: {content}\n'
 
     result += f'Callee(s) of function:\n'
-    callees = session.get_callees_in_line_range(bug_location)
+    callees = session.get_callees_in_line_range(java_file_path, bug_location)
     for callee in callees:
         method_name, line_number, content = callee
         result += f'    - "{method_name}" method called at line {line_number}: {content}\n'

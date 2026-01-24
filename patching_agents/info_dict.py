@@ -81,11 +81,9 @@ class InfoDict:
             # Extract package name
             package_name = None
             package_query = Query(JAVA_LANGUAGE, "(package_declaration) @package_decl")
-            package_matches = package_query.matches(tree.root_node)
-            for match in package_matches:
-                pattern_id, captures_dict = match
-                if 'package_decl' in captures_dict:
-                    package_node = captures_dict['package_decl'][0]
+            package_captures = package_query.captures(tree.root_node)
+            if 'package_decl' in package_captures:
+                for package_node in package_captures['package_decl']:
                     package_text = code[package_node.start_byte:package_node.end_byte].decode('utf8')
                     # Remove 'package' keyword and ';' and whitespace
                     package_name = package_text.replace('package', '').replace(';', '').strip()
@@ -94,11 +92,9 @@ class InfoDict:
             # Extract class name
             class_name = None
             class_query = Query(JAVA_LANGUAGE, "(class_declaration name: (identifier) @class_name)")
-            class_matches = class_query.matches(tree.root_node)
-            for match in class_matches:
-                pattern_id, captures_dict = match
-                if 'class_name' in captures_dict:
-                    class_node = captures_dict['class_name'][0]
+            class_captures = class_query.captures(tree.root_node)
+            if 'class_name' in class_captures:
+                for class_node in class_captures['class_name']:
                     class_name = code[class_node.start_byte:class_node.end_byte].decode('utf8')
                     break
             

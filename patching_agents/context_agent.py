@@ -114,13 +114,13 @@ class ContextAgent(PatchingAgent):
         # CPG is already loaded during initialization
         result = ''
         result += f'Caller(s) of function:\n'
-        callers = self.joern_session.get_function_callers(bug_location)
+        callers = self.joern_session.get_function_callers(java_file_path, bug_location)
         for caller in callers:
             line_number, content = caller
             result += f'    - Line {line_number}: {content}\n'
 
         result += f'Callee(s) of function:\n'
-        callees = self.joern_session.get_callees_in_line_range(bug_location)
+        callees = self.joern_session.get_callees_in_line_range(java_file_path, bug_location)
         for callee in callees:
             method_name, line_number, content = callee
             result += f'    - "{method_name}" method called at line {line_number}: {content}\n'
