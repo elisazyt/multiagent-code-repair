@@ -192,3 +192,25 @@ class ContextDict:
         if function_name in available[file_path]:
             available[file_path].remove(function_name)
     
+    def get_info(self, info_type):
+        """
+        Get info from ContextDict.
+        
+        Args:
+            info_type: Key to look up in context_dict
+            
+        Returns:
+            Value associated with info_type in context_dict
+        """
+        return self.context_dict[info_type]
+    
+    def add_bm25_rag_config(self, k_signatures: int, jsonl_dir, index_dir, k_code_snippets: int, window_size: int, batch_size: int):
+        """Add BM25 RAG configuration to ContextDict"""
+        # BM25 configs
+        self.context_dict["k (signatures)"] = k_signatures
+        self.context_dict["bm25 rag jsonl directory"] = jsonl_dir
+        self.context_dict["bm25 rag index directory"] = index_dir
+        # UniXcoder configs
+        self.context_dict["k (code snippets)"] = k_code_snippets
+        self.context_dict["window size"] = window_size 
+        self.context_dict["batch size"] = batch_size

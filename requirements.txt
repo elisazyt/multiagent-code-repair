@@ -18,6 +18,13 @@ python-dotenv>=1.0.0
 autogen-core>=0.0.2
 autogen-ext[openai]>=0.0.1
 
+# Pyserini for BM25 retrieval
+pyserini
+
+# PyTorch and transformers for UniXcoder embeddings
+torch>=2.0.0
+transformers>=4.20.0
+
 # Standard library dependencies (usually included with Python)
 # subprocess - built-in
 # pathlib - built-in

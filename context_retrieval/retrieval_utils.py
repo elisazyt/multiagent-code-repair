@@ -69,7 +69,7 @@ def get_comments_before_node(java_file_path: str, node: Node) -> Node:
         (block_comment) @block_comment
         (line_comment) @line_comment
         """)
-        
+                
         try:
             # Try the direct API first (works in some environments)
             captures = query.captures(tree.root_node)
@@ -181,7 +181,7 @@ def retrieve_method_by_name(java_file_path: str, method_name: str) -> Node:
                     if child.type == 'identifier':
                         # This should be the method name (comes after modifiers and type)
                         found_name = code[child.start_byte:child.end_byte].decode('utf8')
-                        if found_name == method_name:
+                if found_name == method_name:
                             return node
             
             # Recursively search children
@@ -189,8 +189,8 @@ def retrieve_method_by_name(java_file_path: str, method_name: str) -> Node:
                 result = find_method(child)
                 if result:
                     return result
-            
-            return None
+        
+        return None
         
         return find_method(tree.root_node)
         

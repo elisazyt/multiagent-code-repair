@@ -10,3 +10,4 @@ patches/
 workspace/
 autogen_test/
 autogen_chatcontext/
+bm25_output/
