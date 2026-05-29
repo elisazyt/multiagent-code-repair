@@ -1,5 +1,5 @@
-# https://huggingface.co/microsoft/unixcoder-base
-# wget https://raw.githubusercontent.com/microsoft/CodeBERT/master/UniXcoder/unixcoder.py
+# Original Unixcoder implementation: https://huggingface.co/microsoft/unixcoder-base
+# Command: wget https://raw.githubusercontent.com/microsoft/CodeBERT/master/UniXcoder/unixcoder.py
 
 # Copyright (c) Microsoft Corporation. 
 # Licensed under the MIT license.

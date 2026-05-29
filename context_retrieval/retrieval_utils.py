@@ -121,7 +121,6 @@ def get_name_from_tree_sitter_node(tree_sitter_node, java_file_path: str) -> Tup
         java_file_path: Path to the Java file
         
     Returns: tuple of either ('method', method_name) or ('constructor', constructor_name)
-        
     """
     try:
         with open(java_file_path, 'rb') as f:
@@ -170,28 +169,20 @@ def retrieve_method_by_name(java_file_path: str, method_name: str) -> Node:
         
         tree = parser.parse(code)
         
-        # Manual traversal to find method_declaration nodes
         def find_method(node):
             if node.type == 'method_declaration':
-                # In method_declaration, the structure is typically:
-                # method_declaration -> modifiers? -> type -> identifier (method name) -> formal_parameters -> body
-                # We need to find the identifier that comes after the type
-                found_identifier = False
                 for child in node.children:
                     if child.type == 'identifier':
-                        # This should be the method name (comes after modifiers and type)
-                        found_name = code[child.start_byte:child.end_byte].decode('utf8')
-                if found_name == method_name:
+                        if get_node_text(child, code) == method_name:
                             return node
-            
-            # Recursively search children
+                        break
+
             for child in node.children:
                 result = find_method(child)
                 if result:
                     return result
-        
-        return None
-        
+            return None
+
         return find_method(tree.root_node)
         
     except Exception as e:

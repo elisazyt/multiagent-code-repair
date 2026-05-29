@@ -1,7 +1,10 @@
 import tree_sitter_java
 from tree_sitter import Language, Parser, Query, Node
 from typing import List, Tuple
-import retrieval_utils as utils
+try:
+    from . import retrieval_utils as utils
+except ImportError:
+    import retrieval_utils as utils
 
 JAVA_LANGUAGE = Language(tree_sitter_java.language())
 
@@ -9,6 +12,14 @@ parser = Parser(JAVA_LANGUAGE)
 
 
 def retrieve_buggy_lines_and_node(java_file_path: str, bug_locations: List[Tuple[int, int]]) -> List[Tuple[Tuple[int, int], str, Tuple[Tuple[int, int], Node]]]:
+    """
+    Retrieve the buggy lines of code and the node that contains the buggy lines of code.
+    Returns: a list of tuples, one per bug location, each containing:
+    - bug location (start, end)
+    - buggy lines of code
+    - buggy node location (start, end)
+    - buggy Node object
+    """
     result = []
     for bug_location in bug_locations:
         buggy_lines = utils.retrieve_code_by_line_number(java_file_path, bug_location)
@@ -17,17 +28,14 @@ def retrieve_buggy_lines_and_node(java_file_path: str, bug_locations: List[Tuple
     return result
 
 # TODO: further narrow down what's provided in retrieve_buggy_class. no need to provide all method bodies
-
-
 def retrieve_buggy_node(java_file_path: str, bug_location: Tuple[int, int]) -> Tuple[Tuple[int, int], Node]:
     """
-    Retrieve the node that contains the buggy lines of code.
+    Retrieve the node that contains the buggy lines of code (either method, constructor, class, or None)
+    
+    Args: path to buggy code file, and a single bug location
+    Returns: ((start of node, end of node), buggy Node object)
     """
     try:
-        with open(java_file_path, 'rb') as f:
-            code = f.read()
-        tree = parser.parse(code)
-    
         # Most common case: try to retrieve buggy method or constructor
         buggy_method_node = retrieve_buggy_method_or_constructor(java_file_path, bug_location)
         if buggy_method_node:
@@ -55,35 +63,6 @@ def retrieve_buggy_node(java_file_path: str, bug_location: Tuple[int, int]) -> T
         print(f"Error reading file {java_file_path}: {e}")
         return None
 
-
-def extract_class_name_from_node(class_node: Node, java_file_path: str) -> str:
-    """
-    Extract the class name from a class_declaration node.
-    
-    Args:
-        class_node: Tree-sitter class_declaration node
-        java_file_path: Path to the Java file (needed to read code)
-        
-    Returns:
-        str: The class name, or None if extraction fails
-    """
-    try:
-        with open(java_file_path, 'rb') as f:
-            code = f.read()
-        
-        # Find the identifier child which is the class name
-        # In class_declaration, the structure is typically: modifiers? class identifier type_parameters? superclass? interfaces? body
-        for child in class_node.children:
-            if child.type == 'identifier':
-                return utils.get_node_text(child, code)
-        
-        return None
-        
-    except Exception as e:
-        print(f"Error extracting class name: {e}")
-        return None
-
-
 def extract_class_name_from_file(java_file_path: str, line_numbers: Tuple[int, int]) -> str:
     """
     Extract class name from a Java file using tree-sitter at the given line numbers.
@@ -109,6 +88,35 @@ def extract_class_name_from_file(java_file_path: str, line_numbers: Tuple[int, i
         raise ValueError(f"Could not extract class name from class node in {java_file_path} at lines {line_numbers}")
     
     return class_name
+
+
+def extract_class_name_from_node(class_node: Node, java_file_path: str) -> str:
+    """
+    Helper for extract_class_name_from_file.
+    Extracts the class name from a given class_declaration node.
+
+    Args:
+        class_node: Tree-sitter class_declaration node
+        java_file_path: Path to the Java file (needed to read code)
+
+    Returns:
+        str: The class name, or None if extraction fails
+    """
+    try:
+        with open(java_file_path, 'rb') as f:
+            code = f.read()
+        
+        # Find the identifier child which is the class name
+        # In class_declaration, the structure is typically: modifiers? class identifier type_parameters? superclass? interfaces? body
+        for child in class_node.children:
+            if child.type == 'identifier':
+                return utils.get_node_text(child, code)
+        
+        return None
+        
+    except Exception as e:
+        print(f"Error extracting class name: {e}")
+        return None
 
 
 ########################################################################################
@@ -158,7 +166,6 @@ def retrieve_buggy_method_or_constructor(java_file_path: str, bug_location: Tupl
     except Exception as e:
         print(f"Error reading file {java_file_path}: {e}")
         return None
-
 
 
 def retrieve_buggy_class(java_file_path: str, bug_location: Tuple[int, int]) -> Node:

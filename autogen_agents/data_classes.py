@@ -38,8 +38,10 @@ class TestingResponse:
     patcher_id: str
     # success is a bool: True if all tests passed, False if tests failed or didn't run/compile
     success: bool
-    # result is the testing result message
-    result: str
+    # testing result message formatted as a string, used for logging/prompting
+    str_result: str
+    # testing result message formatted as a list of dicts, used for bm25/rag
+    list_result: list[dict[str, str]]
 
 
 #TODO: inegrate these with the OpenAI function calling schema
@@ -72,8 +74,6 @@ class SummaryTask:
     function_results: str  # String with reasoning and results for all rounds
     # Attempt number (e.g., 1, 2, 3) - each attempt consists of up to 3 rounds
     retrieval_attempt: int  # Actually represents attempt number, not round number
-    # Past context retrieval summaries (from previous attempts, stored in ContextDict)
-    past_summaries: list[str] = None
 
 @dataclass
 class SummaryResponse:

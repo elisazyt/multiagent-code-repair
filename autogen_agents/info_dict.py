@@ -10,7 +10,7 @@ from tree_sitter import Language, Parser, Query
 JAVA_LANGUAGE = Language(tree_sitter_java.language())
 parser = Parser(JAVA_LANGUAGE)
 
-#TODO: split info into multiple dicts for different purposes
+# TODO: split info into multiple dicts for different purposes
 class InfoDict:
     def __init__(self):
         self.info_dict = {}
@@ -131,17 +131,33 @@ class ContextDict:
         
         # Default list of all available functions (used when initializing for a new file)
         # Must match the functions listed in cr_functions.py
+        # Note: similar_lines_of_code and similar_function_name are only available from round 2 onwards
         self._default_functions = [
             "comment_retrieval",
-            "similar_lines_of_code",
-            "similar_function_name",
-            "all_funcs_in_class",
             "all_variables_in_class",
             "one_hop_api_retrieval",
             "get_callers",
             "get_callees",
             "test_failure_check"
         ]
+
+        '''
+        UPDATED LIST:
+        - comment retrieval
+        - top k code snippets (in class)
+        - get callers
+        - top k callable functions (one-hop APIs, 2-hop APIs, within class)
+        '''
+        
+        # Functions that are only available from round 2 onwards (require test failure info)
+        self._round2_functions = [
+            "similar_lines_of_code",
+            "similar_function_name"
+        ]
+
+        # Test failure dict from most recent round of testing
+        # Initialize as empty dict, but will be replaced once the test is run via TestingAgent 
+        self.test_info = []
 
         self.initialize_from_info_dict(info_dict)
     
@@ -192,6 +208,17 @@ class ContextDict:
         if function_name in available[file_path]:
             available[file_path].remove(function_name)
     
+    def add_round2_functions(self):
+        """
+        Add round 2 functions (similar_lines_of_code, similar_function_name) to all files.
+        Should be called at the start of round 2.
+        """
+        available = self.context_dict.get("available context functions", {})
+        for file_path in available.keys():
+            for func in self._round2_functions:
+                if func not in available[file_path]:
+                    available[file_path].append(func)
+    
     def get_info(self, info_type):
         """
         Get info from ContextDict.
@@ -214,3 +241,7 @@ class ContextDict:
         self.context_dict["k (code snippets)"] = k_code_snippets
         self.context_dict["window size"] = window_size 
         self.context_dict["batch size"] = batch_size
+
+    def add_test_info(self, test_info_list: list[dict[str, str]]):
+        """Store failing test info for BM25/RAG (from TestingResponse.list_result)."""
+        self.test_info = test_info_list

@@ -2,17 +2,17 @@ import os
 import sys
 from dotenv import load_dotenv
 
-# Add autogen_agents to path to import InfoDict and cr_functions
-# File is at: agent_tests/unixcoder_test.py, need to go up one level to autogen_agents/
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-autogen_agents_path = os.path.join(parent_dir, 'autogen_agents')
-if autogen_agents_path not in sys.path:
-    sys.path.append(autogen_agents_path)
-from info_dict import InfoDict, ContextDict
-import cr_functions
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
-# Load environment variables from .env file
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from autogen_agents.info_dict import InfoDict, ContextDict
+from autogen_agents import cr_functions
+from context_retrieval.joern_session import JoernSession
+import context_retrieval.retrieval_utils as utils
+import context_retrieval.isolate_bug as ib
+
+project_root = parent_dir
 env_path = os.path.join(project_root, '.env')
 load_dotenv(env_path)
 
@@ -57,13 +57,6 @@ joern_github_dir = os.getenv('JOERN_GITHUB_DIR')
 if joern_executable and joern_directory:
     info_dict.add_joern_config(joern_executable, joern_directory)
 
-# Add the context_retrieval directory to the path
-sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'context_retrieval'))
-
-# Import JoernSession to create CPG if needed
-from joern_session import JoernSession
-import retrieval_utils as utils
-
 # Check if CPG exists, create it if it doesn't
 cpg_project_name = "Chart2"
 cpg_path = os.path.join(joern_directory, 'workspace', cpg_project_name, 'cpg.bin.zip')
@@ -91,7 +84,6 @@ if not joern_session.load_cpg(cpg_project_name):
     exit(1)
 
 try:
-    import isolate_bug as ib
     bug_location = (756, 757)
     class_name = ib.extract_class_name_from_file(chart2_path, bug_location)
 except ValueError as e:
@@ -126,10 +118,7 @@ results = cr_functions.top_k_code_snippets(
     context_dict=context_dict
 )
 
-# Handle both string (error) and list (success) return types
-if isinstance(results, str):
-    print(f"ERROR: {results}")
-elif isinstance(results, list) and len(results) >= 3:
+if isinstance(results, list) and len(results) >= 3:
     print("\n" + "="*100)
     print("TOP 3 RESULTS:")
     print("="*100)

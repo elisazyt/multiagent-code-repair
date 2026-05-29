@@ -81,38 +81,35 @@ async def main():
     for bug fixing. You can request context retrieval functions for specific files. Only request functions that are 
     actually needed to understand and fix the bug."""
 
-    # Store reference to AdminAgent instance so we can access its context later
-    admin_agent_instance_ref = [None]
-    context_agent_instance_ref = [None]
+    # Store reference to AdminAgent and ContextAgent instances so we can access their context later
+    admin_agent_instance_ref = None
+    context_agent_instance_ref = None
     
     def admin_agent_factory():
-        admin = AdminAgent("Admin Agent", receiver_instances, admin_system_message, context_info=context_info, runtime=runtime)
-        admin_agent_instance_ref[0] = admin
+        nonlocal admin_agent_instance_ref
+        admin = AdminAgent(receiver_instances, admin_system_message, context_info=context_info, runtime=runtime)
+        admin_agent_instance_ref = admin
         return admin
-    
-    # Single factory for PatchingAgent - will look up role_description based on agent key in __init__
-    def patching_agent_factory():
-        return PatchingAgent("Patching Agent", model_client, information, role_descriptions)
     
     # Factory for ContextRetrievalAgent
     def context_agent_factory():
+        nonlocal context_agent_instance_ref
         context_agent = ContextRetrievalAgent(
-            description="context",
             model_client=model_client,
             context_info=context_info,
             role_description=context_role_description,
             past_summary="",
             information=information
         )
-        context_agent_instance_ref[0] = context_agent
+        context_agent_instance_ref = context_agent
         return context_agent
 
     # Register the classes
     await AdminAgent.register(runtime, "admin", admin_agent_factory)
-    await PatchingAgent.register(runtime, "patching", patching_agent_factory)
-    await TestingAgent.register(runtime, "testing", lambda: TestingAgent("Testing Agent", information))
+    await PatchingAgent.register(runtime, "patching", lambda: PatchingAgent(model_client, information, role_descriptions))
+    await TestingAgent.register(runtime, "testing", lambda: TestingAgent(information))
     await ContextRetrievalAgent.register(runtime, "context", context_agent_factory)
-    await SummaryAgent.register(runtime, "summary", lambda: SummaryAgent("Summary Agent", model_client))
+    await SummaryAgent.register(runtime, "summary", lambda: SummaryAgent(model_client))
 
     runtime.start()
 
@@ -122,10 +119,10 @@ async def main():
     # Run all agents' loops in parallel
     # Note: Context retrieval will be run automatically when the context patching agent needs it
     basic_rounds, cot_rounds, context_rounds, pattern_rounds = await asyncio.gather(
-        run_patch_test_loop("basic", BASIC_PROMPT, admin_agent, runtime),
-        run_patch_test_loop("cot", COT_PROMPT, admin_agent, runtime),
-        run_patch_test_loop("context", "Generate a patch for the bug using the context information provided.", admin_agent, runtime),
-        run_patch_test_loop("pattern", PATTERN_PROMPT, admin_agent, runtime)
+        run_patch_test_loop("basic", BASIC_PROMPT, admin_agent, context_info, runtime),
+        run_patch_test_loop("cot", COT_PROMPT, admin_agent, context_info, runtime),
+        run_patch_test_loop("context", "Generate a patch for the bug using the context information provided.", admin_agent, context_info, runtime),
+        run_patch_test_loop("pattern", PATTERN_PROMPT, admin_agent, context_info, runtime)
     )
     
     print(f"\nFinal results:")

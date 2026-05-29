@@ -14,10 +14,7 @@ load_dotenv()
 import torch
 from unixcoder import UniXcoder
 
-# Add context_retrieval to path for JoernSession
-sys.path.append(os.path.join(parent_dir, 'context_retrieval'))
-from joern_session import JoernSession
-import retrieval_utils as utils
+import context_retrieval.retrieval_utils as utils
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = UniXcoder("microsoft/unixcoder-base")
@@ -90,7 +87,7 @@ def embed_code_snippets(method_bodies: List[Tuple[str, Tuple[int, int]]], window
         batch_tokens = [tokens + [model.config.pad_token_id] * (max_len_in_batch - len(tokens)) 
                         for tokens in batch_tokens_no_pad]
         batch_tensor = torch.tensor(batch_tokens).to(device)
-        token_embeddings, sentence_embeddings = model(batch_tensor)
+        _, sentence_embeddings = model(batch_tensor)
         # sentence_embeddings is a tensor of shape [batch_size, 768]: one embedding per code snippet
         batch_embeddings.append(sentence_embeddings)
     

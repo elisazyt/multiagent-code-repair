@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+from typing import List, Dict, Tuple
 
 # Add parent directory to path for absolute imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -106,15 +107,16 @@ def run_defects4j_test(project_name: str, version: str, checkout_dir: str, java_
 
 
 # Call this function if success code is 0
-def get_failing_test_info(working_dir: str, project_name: str, failing_tests: list[str]) -> list[dict[str]]:
+def get_failing_test_info(working_dir: str, project_name: str, failing_tests: List[str]) -> Tuple[str, List[Dict[str, str]]]:
     """
     Extract detailed information about failing tests.
 
     Return:
-    list of failing tests, each containing: a dict of strings identifying the exception name, entire buggy
-    function, and the exact failing line
+    Tuple of (test_info_string, test_info_list):
+    - test_info_string: Formatted string with all test failure information
+    - test_info_list: List of dicts, each containing: failing test identifier, failure message, buggy method, and failure line
     """
-    all_info = []
+    test_info_list = []
 
     # get failing_tests_info
     failing_tests_path = os.path.join(working_dir, 'failing_tests')
@@ -197,13 +199,13 @@ def get_failing_test_info(working_dir: str, project_name: str, failing_tests: li
             'buggy method': buggy_method_with_marker,  # Use the marked version with line numbers
             'buggy line': buggy_line
         }
-        all_info.append(test_info)
-
+        test_info_list.append(test_info)
     
     test_info_string = ""
-    for test_info in all_info:
+    for test_info in test_info_list:
         test_info_string += f"Failing test identifier: {test_info['failing test']}\n"
         test_info_string += f"Failure message: {test_info['failure message']}\n"
         test_info_string += f"Failing method: {test_info['buggy method']}\n"
         test_info_string += f"Failure line: {test_info['buggy line']}\n"
-    return test_info_string
+    # test_info_string is for the agent output, test_info_list is for bm25/rag which is formatted differently
+    return (test_info_string, test_info_list)

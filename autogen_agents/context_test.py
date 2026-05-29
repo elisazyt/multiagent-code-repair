@@ -51,11 +51,11 @@ async def test_context_retrieval():
     actually needed to understand and fix the bug."""
     
     agent = ContextRetrievalAgent(
-        description="test_context_agent",
         model_client=model_client,
         context_info=context_info,
         role_description=role_description,
-        past_summary=""
+        past_summary="",
+        information=information,
     )
     
     # Create a test task

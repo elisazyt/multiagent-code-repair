@@ -17,25 +17,18 @@ import retrieval_utils as r_utils
 ########################################################
 # Helper functions for running one round of patching and testing
 ########################################################
-# For now, run 5 rounds. may need to change later.
-async def run_patch_test_loop(patcher_id: str, message: str, admin_agent: AgentId, runtime: SingleThreadedAgentRuntime, num_rounds=2):
+# TODO: For now, run 2 rounds. may need to change later
+async def run_patch_test_loop(patcher_id: str, message: str, admin_agent: AgentId, context_dict: ContextDict, runtime: SingleThreadedAgentRuntime, num_rounds=2):
     print(f"[{patcher_id}] Loop started!")
     round = 1
-    last_test_response = None
 
     while (round <= num_rounds):
         # Create patching task (initial or regeneration)
         if (round == 1):
             patching_task = PatchingTask(patcher_id=patcher_id, message=message, patching_attempt=round)
         else:
-            # Use previous test response to create regeneration prompt
-            if last_test_response.success:
-                print(f"[{patcher_id}] Test passed! Saving patch as a candidate.")
-                # save the patch as a candidate
-                break
-            else:
-                # Reprompt to regenerate the patch
-                patching_task = PatchingTask(patcher_id=patcher_id, message=f"Based on the previous messages and failing test information, regenerate the patch.", patching_attempt=round)
+            # Reprompt to regenerate the patch
+            patching_task = PatchingTask(patcher_id=patcher_id, message=f"Based on the previous messages and failing test information, regenerate the patch.", patching_attempt=round)
         
         # Send single patching task to AdminAgent
         patching_response = await runtime.send_message(patching_task, recipient=admin_agent)
@@ -53,16 +46,17 @@ async def run_patch_test_loop(patcher_id: str, message: str, admin_agent: AgentI
         from agents import PatchingAgent
         if patcher_id in PatchingAgent._instances_dict:
             await PatchingAgent._instances_dict[patcher_id].add_test_result(
-                testing_response.result, 
+                testing_response.str_result, 
                 testing_response.success,
                 source="testing"  # TestingAgent's key
             )
         
         if testing_response.success:
-            print(f"[{patcher_id}] Test passed: {testing_response.result}")
+            print(f"[{patcher_id}] Test passed: {testing_response.str_result}")
+            # TODO: save the patch as a candidate
             break
         else:
-            last_test_response = testing_response
+            context_dict.add_test_info(testing_response.list_result)
         
         round += 1
     
@@ -110,7 +104,6 @@ async def run_single_attempt_context(attempt_num: int, admin_agent: AgentId, run
     summary_task = SummaryTask(
         function_results=context_response.function_results,  # String with reasoning and results
         retrieval_attempt=attempt_num,
-        past_summaries=past_summaries if past_summaries else []
     )
     summary_response = await runtime.send_message(summary_task, recipient=admin_agent)
     print(f"[context] Attempt {attempt_num} - Summary completed")
@@ -233,7 +226,7 @@ def format_bugs_grouped_by_node(buggy_file_info, information: InfoDict, start_nu
     # Group bugs by unique buggy node
     unique_nodes = {}  # (start, end) -> list of (bug_location, bug_code, buggy_node_info)
     for bug_in_file in bugs_in_file:
-        bug_location, bug_code, buggy_node_info = bug_in_file
+        _, bug_code, buggy_node_info = bug_in_file
         if buggy_node_info is None:
             continue
         buggy_node_location, buggy_node = buggy_node_info
@@ -258,7 +251,7 @@ def format_bugs_grouped_by_node(buggy_file_info, information: InfoDict, start_nu
         
         # Use the first bug's node info for formatting (they all have the same node)
         first_bug = bugs_in_node[0]
-        bug_location, bug_code, buggy_node_info = first_bug
+        _, bug_code, buggy_node_info = first_bug
         buggy_node_location, buggy_node = buggy_node_info
         
         # Format the node info
@@ -290,12 +283,14 @@ def format_bugs_grouped_by_node(buggy_file_info, information: InfoDict, start_nu
     return result, bug_number
 
 def format_short_bug_info(information: InfoDict) -> str:
-    """Format bug locations in a short format for context retrieval instructions"""
+    """
+    Format only the bug locations for context retrieval instructions
+    """
     bug_locations = information.get_info("bug files and locations")
     result = ""
     bug_number = 1
     
-    for file_path, modified_source_name, bug_locations_list in bug_locations:
+    for file_path, _, bug_locations_list in bug_locations:
         result += f"File: {file_path}\n"
         for start_line, end_line in bug_locations_list:
             result += f"    Bug location #{bug_number}: (start_line, end_line) = ({start_line}, {end_line})\n"
@@ -326,15 +321,16 @@ def format_past_context(context_info: ContextDict, repair_summary: str = "", inf
     
     # Show available functions per file with clear instructions
     result += "\nHere are the functions you can call and their arguments:\n"
+    result += "\nThese functions are available to call in every round:\n"
     result += "- comment_retrieval(start_line, end_line): retrieve comments before the bug location\n"
-    result += "- similar_lines_of_code(start_line, end_line): retrieve top k similar lines of code to the bug location\n"
-    result += "- similar_function_name(start_line, end_line): retrieve top k functions with most similar name to the function containing the bug location\n"
-    result += "- all_funcs_in_class(start_line, end_line): retrieve all functions in the class containing the bug location\n"
     result += "- all_variables_in_class(start_line, end_line): retrieve all variables in the class containing the bug location\n"
     result += "- one_hop_api_retrieval(start_line, end_line, var): retrieve 1-hop APIs callable on the specified variable. Requires both the bug location (start_line, end_line) and the variable name (var). This function should only be called on suspicious variables.\n"
     result += "- get_callers(start_line, end_line): retrieve all callers of the function at the bug location\n"
-    result += "- get_callees(start_line, end_line): retrieve all callees within the bug location\n\n"
+    result += "- get_callees(start_line, end_line): retrieve all callees within the bug location\n"
     result += "- test_failure_check(): retrieve top k functions/APIs with most similar name to the failing test name/info?\n"
+    result += "\nThese functions are only available from the second round onwards:\n"
+    result += "- similar_lines_of_code(start_line, end_line): retrieve top k similar lines of code to the bug location\n"
+    result += "- similar_function_name(start_line, end_line): retrieve top k functions with most similar name to the function containing the bug location\n"
     
     result += "The arguments must be labeled as one of \"start_line\", \"end_line\", or \"var\".\n"
     result += "\"start_line\" and \"end_line\" can be used to specify a bug location that you want to retrieve context for. It should match one of the bug locations listed above.\n"
@@ -464,24 +460,6 @@ async def log_message(
     await context.add_message(msg)
 
 
-async def print_message_thread(context: UnboundedChatCompletionContext, agent_id: str = "Unknown"):
-    """Helper method to print the entire message thread from context"""
-    messages = await context.get_messages()
-    print(f"\n{'='*80}")
-    print(f"Full Message Thread (Agent: {agent_id}):")
-    print(f"{'='*80}")
-    for i, msg in enumerate(messages, 1):
-        if isinstance(msg, SystemMessage):
-            print(f"[{i}] System: {msg.content}")
-        elif isinstance(msg, UserMessage):
-            print(f"[{i}] User (source: {msg.source}): {msg.content}")
-        elif isinstance(msg, AssistantMessage):
-            print(f"[{i}] Assistant (source: {msg.source}): {msg.content}")
-        else:
-            print(f"[{i}] {type(msg).__name__}: {msg}")
-    print(f"{'='*80}\n")
-
-
 async def save_message_thread(
     context: UnboundedChatCompletionContext, 
     agent_id: str,
@@ -527,9 +505,3 @@ async def save_message_thread(
         f.write(f"{'='*80}\n")
     
     print(f"Message thread saved to: {file_path}")
-
-
-if __name__ == "__main__":
-    information = InfoDict()
-    information.add_bug_info("test", "1", [("ALL_TESTS/closure8.java", [(202, 205)])], "revised_multiagent")
-    print(get_system_message(information, "You are a basic patching agent. Generate patches for bugs in Java code."))

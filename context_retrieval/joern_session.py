@@ -5,17 +5,21 @@ import json
 import sys
 from typing import Optional, Tuple, List, Dict, Any
 
-# Add current directory to path for local imports
-current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, current_dir)
+try:
+    from . import retrieval_utils as utils
+    from . import isolate_bug as ib
+except ImportError:
+    import retrieval_utils as utils
+    import isolate_bug as ib
 
-import retrieval_utils as utils
-import isolate_bug as ib
-
-# Add test_suites to path for checkout function
-import sys
-sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'test_suites'))
-import test_suites_helpers as tsh
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+try:
+    from test_suites import test_suites_helpers as tsh
+except ImportError:
+    sys.path.append(os.path.join(parent_dir, 'test_suites'))
+    import test_suites_helpers as tsh
 
 
 # TODO: improve CFG by providing list of nodes and edges and consider more than 1-hop distance. additionally,
@@ -193,7 +197,7 @@ class JoernSession:
             
             # Step 2: Use class name in Joern query
             query = f'cpg.typeDecl.name("{class_name}").method.map(m => (m.name, m.fullName)).toJson'
-            stdout, stderr = self._run_joern_query(query)
+            stdout, _ = self._run_joern_query(query)
             if not stdout:
                 return []
             
@@ -245,89 +249,6 @@ class JoernSession:
                 return []
         
         return []
-
-
-    @staticmethod
-    def _parse_joern_json_with_unescaped_quotes(json_str: str) -> Optional[list]:
-        """
-        Parse JSON from Joern that may contain unescaped quotes in code strings.
-        Returns the parsed data or None if parsing fails.
-        """
-        # Step 1: Try standard JSON parsing (most common case - valid JSON)
-        try:
-            return json.loads(json_str)
-        except json.JSONDecodeError:
-            pass
-        
-        # Step 2: Try unescaping - Joern sometimes outputs escaped JSON strings
-        # Replace \" with " (handles double-escaped quotes from Joern output)
-        try:
-            json_str_unescaped = json_str.replace('\\"', '"')
-            return json.loads(json_str_unescaped)
-        except (json.JSONDecodeError, ValueError):
-            pass
-            
-            # If parsing fails, try to extract data manually using regex
-            # This handles cases like: {"_1":729,"_2":"code with \"unescaped\" quotes"}
-            import re
-            results = []
-            
-            # Find all {"_1":value patterns and extract the values
-            # Try with escaped quotes first, then unescaped
-            json_str_for_regex = json_str.replace('\\"', '"')  # Unescape for regex matching
-            for match in re.finditer(r'\{"_1":([^,]+),"_2":"', json_str_for_regex):
-                value1 = match.group(1)
-                code_start = match.end()
-                
-                # Find the closing " before } or ,
-                code_end = code_start
-                while code_end < len(json_str_for_regex):
-                    if json_str_for_regex[code_end] == '"' and code_end + 1 < len(json_str_for_regex):
-                        next_char = json_str_for_regex[code_end + 1]
-                        if next_char in [',', '}']:
-                            break
-                    code_end += 1
-                
-                code = json_str_for_regex[code_start:code_end]
-                
-                # Try to parse value1 as int, otherwise keep as string
-                try:
-                    value1 = int(value1)
-                except ValueError:
-                    pass
-                
-                results.append({'_1': value1, '_2': code})
-            
-        # Pattern 2: 3-value tuples {"_1":value1,"_2":value2,"_3":"code"}
-        for match in re.finditer(r'\{"_1":([^,]+),"_2":([^,]+),"_3":"', json_str_for_regex):
-            value1 = match.group(1)
-            value2 = match.group(2)
-            code_start = match.end()
-            
-            code_end = code_start
-            while code_end < len(json_str_for_regex):
-                if json_str_for_regex[code_end] == '"' and code_end + 1 < len(json_str_for_regex):
-                    next_char = json_str_for_regex[code_end + 1]
-                    if next_char in [',', '}']:
-                        break
-                code_end += 1
-            
-            code = json_str_for_regex[code_start:code_end]
-            
-            # Parse values as int if possible
-            try:
-                value1 = int(value1)
-            except ValueError:
-                pass
-            try:
-                value2 = int(value2)
-            except ValueError:
-                pass
-            
-            results.append({'_1': value1, '_2': value2, '_3': code})
-        
-        # Return results if found, otherwise None
-        return results if results else None
 
     # Example: org.jfree.data.general.DatasetUtilities.iterateDomainBounds:org.jfree.data.Range(org.jfree.data.xy.XYDataset,boolean)
     def get_full_method_signature_from_line_numbers(self, java_file_path: str, line_numbers: Tuple[int, int], class_name: str) -> Optional[str]:
@@ -778,7 +699,7 @@ class JoernSession:
 
 
 
-    def get_callees_in_line_range(self, java_file_path: str, line_numbers: Tuple[int, int], class_name: str) -> List[Tuple[str, int, str]]:
+    def get_callees_in_line_range(self, java_file_path: str, line_numbers: Tuple[int, int], class_name: str) -> List[str]:
         """
         Get all method calls within a specific line range for a specific file.
         
@@ -789,7 +710,7 @@ class JoernSession:
                        Filters results to calls in files ending with "{class_name}.java"
             
         Returns:
-            List of tuples (method_name, line_number, code) for each callee
+            List of method names (strings) for each callee
         """
         if not self.project_name:
             raise RuntimeError("No project loaded. Call load_cpg() first.")
@@ -799,7 +720,7 @@ class JoernSession:
         # Get all method calls directly within the specific line range
         # Filter out operators (they start with "<operator>.") to only get actual method calls
         # Filter by class name in file path
-        query = f'cpg.call.filter(call => call.lineNumber.isDefined && call.lineNumber.get >= {start_line} && call.lineNumber.get <= {end_line} && !call.name.startsWith("<operator>") && call.file.name.filter(_.endsWith("{class_name}.java")).nonEmpty).map(call => (call.name, call.lineNumber.get, call.code)).toJson'
+        query = f'cpg.call.filter(call => call.lineNumber.isDefined && call.lineNumber.get >= {start_line} && call.lineNumber.get <= {end_line} && !call.name.startsWith("<operator>") && call.file.name.filter(_.endsWith("{class_name}.java")).nonEmpty).map(call => call.name).toJson'
         
         stdout, stderr = self._run_joern_query(query)
         if stderr:
@@ -853,27 +774,39 @@ class JoernSession:
             if data is None:
                 print(f"Failed to parse JSON. JSON string was: {json_str[:200]}")
                 return []
-                
-                # If data is still a string, try parsing it again
-                if isinstance(data, str):
-                    data = json.loads(data)
             
-            callees = []
+            # If data is still a string, try parsing it again
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except json.JSONDecodeError:
+                    print(f"Failed to parse JSON string. JSON string was: {json_str[:200]}")
+                    return []
+            
+            method_names = []
             if isinstance(data, list):
-                for callee in data:
-                    if isinstance(callee, dict) and '_1' in callee and '_2' in callee and '_3' in callee:
-                        # Joern serializes tuples as objects with _1, _2, _3 keys
-                        # Format: {"_1": name, "_2": lineNumber, "_3": code}
-                        method_name = callee['_1']
-                        line_number = callee['_2']
-                        code = callee['_3']
-                        
-                        if method_name and line_number:
-                            callees.append((method_name, line_number, code if code else ""))
+                for item in data:
+                    # Joern returns strings directly when mapping to call.name
+                    if isinstance(item, str):
+                        if item:  # Only add non-empty strings
+                            method_names.append(item)
+                    elif isinstance(item, dict) and '_1' in item:
+                        # Handle tuple format (backward compatibility if query returns tuples)
+                        method_name = item['_1']
+                        if method_name:
+                            method_names.append(method_name)
             else:
                 print(f"Expected list but got {type(data)}: {data}")
             
-            return callees
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_method_names = []
+            for name in method_names:
+                if name not in seen:
+                    seen.add(name)
+                    unique_method_names.append(name)
+            
+            return unique_method_names
             
         except json.JSONDecodeError as e:
             print(f"Error parsing JSON: {e}")
@@ -899,7 +832,7 @@ class JoernSession:
         if not self.project_name:
             raise RuntimeError("No project loaded. Call load_cpg() first.")
         
-        method_signature = self.get_method_signature_from_line_numbers(java_file_path, line_numbers, class_name)
+        method_signature = self.get_full_method_signature_from_line_numbers(java_file_path, line_numbers, class_name)
         if not method_signature:
             print(f"DEBUG get_function_callers: Could not find method signature for {java_file_path} at lines {line_numbers} with class_name {class_name}")
             return []
@@ -1036,3 +969,86 @@ class JoernSession:
         except Exception as e:
             print(f"Error running query: {e}")
             return None, str(e)
+
+    @staticmethod
+    def _parse_joern_json_with_unescaped_quotes(json_str: str) -> Optional[list]:
+        """
+        Parse JSON from Joern that may contain unescaped quotes in code strings.
+        Returns the parsed data or None if parsing fails.
+        """
+        # Step 1: Try standard JSON parsing (most common case - valid JSON)
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+        
+        # Step 2: Try unescaping - Joern sometimes outputs escaped JSON strings
+        # Replace \" with " (handles double-escaped quotes from Joern output)
+        try:
+            json_str_unescaped = json_str.replace('\\"', '"')
+            return json.loads(json_str_unescaped)
+        except (json.JSONDecodeError, ValueError):
+            pass
+            
+            # If parsing fails, try to extract data manually using regex
+            # This handles cases like: {"_1":729,"_2":"code with \"unescaped\" quotes"}
+            import re
+            results = []
+            
+            # Find all {"_1":value patterns and extract the values
+            # Try with escaped quotes first, then unescaped
+            json_str_for_regex = json_str.replace('\\"', '"')  # Unescape for regex matching
+            for match in re.finditer(r'\{"_1":([^,]+),"_2":"', json_str_for_regex):
+                value1 = match.group(1)
+                code_start = match.end()
+                
+                # Find the closing " before } or ,
+                code_end = code_start
+                while code_end < len(json_str_for_regex):
+                    if json_str_for_regex[code_end] == '"' and code_end + 1 < len(json_str_for_regex):
+                        next_char = json_str_for_regex[code_end + 1]
+                        if next_char in [',', '}']:
+                            break
+                    code_end += 1
+                
+                code = json_str_for_regex[code_start:code_end]
+                
+                # Try to parse value1 as int, otherwise keep as string
+                try:
+                    value1 = int(value1)
+                except ValueError:
+                    pass
+                
+                results.append({'_1': value1, '_2': code})
+            
+        # Pattern 2: 3-value tuples {"_1":value1,"_2":value2,"_3":"code"}
+        for match in re.finditer(r'\{"_1":([^,]+),"_2":([^,]+),"_3":"', json_str_for_regex):
+            value1 = match.group(1)
+            value2 = match.group(2)
+            code_start = match.end()
+            
+            code_end = code_start
+            while code_end < len(json_str_for_regex):
+                if json_str_for_regex[code_end] == '"' and code_end + 1 < len(json_str_for_regex):
+                    next_char = json_str_for_regex[code_end + 1]
+                    if next_char in [',', '}']:
+                        break
+                code_end += 1
+            
+            code = json_str_for_regex[code_start:code_end]
+            
+            # Parse values as int if possible
+            try:
+                value1 = int(value1)
+            except ValueError:
+                pass
+            try:
+                value2 = int(value2)
+            except ValueError:
+                pass
+            
+            results.append({'_1': value1, '_2': value2, '_3': code})
+        
+        # Return results if found, otherwise None
+        return results if results else None
+

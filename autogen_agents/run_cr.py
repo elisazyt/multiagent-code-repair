@@ -22,7 +22,7 @@ async def main():
         model=os.environ.get("GPT_MODEL", "gpt-4o-mini"),
         api_key=os.environ.get("OPENAI_API_KEY")
     )
-    
+
     # Create InfoDict for closure8 bug
     closure8_path = os.path.join(project_root, "ALL_TESTS", "closure8.java")
     
@@ -66,7 +66,6 @@ async def main():
     # Factory for ContextRetrievalAgent
     def context_agent_factory():
         context_agent = ContextRetrievalAgent(
-            description="context",
             model_client=model_client,
             context_info=context_info,
             role_description=context_role_description,
@@ -91,7 +90,7 @@ async def main():
     
     print(f"[context] Attempt 1 completed.")
     print(f"\nContext retrieval results:\n{context_response.function_results}")
-
+    
     # Save the ContextRetrievalAgent's message thread
     if context_agent_instance_ref[0] is not None:
         context_agent = context_agent_instance_ref[0]

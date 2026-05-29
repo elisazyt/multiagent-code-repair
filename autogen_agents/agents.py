@@ -25,8 +25,8 @@ from test_suites import test_suites as ts
 
 
 class AdminAgent(RoutedAgent):
-    def __init__(self, description: str, receiver_instances: dict[str, list[AgentId]], system_message: SystemMessage, context_info: ContextDict = None, runtime = None):
-        super().__init__(description)
+    def __init__(self, receiver_instances: dict[str, list[AgentId]], system_message: SystemMessage, context_info: ContextDict = None, runtime = None):
+        super().__init__("Admin Agent")
         self.patching_instances = receiver_instances.get("patching", [])
         self.testing_instances = receiver_instances.get("testing", [])
         self.context_instances = receiver_instances.get("context", [])
@@ -100,7 +100,7 @@ class AdminAgent(RoutedAgent):
         # Log testing response (source is the testing agent)
         await helpers.log_message(
             self._context,
-            f"TestingResponse (patcher_id={testing_response.patcher_id}, success={testing_response.success}): {testing_response.result}",
+            f"TestingResponse (patcher_id={testing_response.patcher_id}, success={testing_response.success}): {testing_response.str_result}",
             role="assistant",
             source="testing"
         )
@@ -124,7 +124,8 @@ class AdminAgent(RoutedAgent):
         
         context_response = await self.send_message(message, self.context_instances[0])
         
-        # Log context retrieval response
+        # Log context retrieval response (the full, raw response)
+        # Note: this will later be condensed into a summary when we send it in a prompt to the patching agent
         await helpers.log_message(
             self._context,
             f"ContextRetrievalResponse (retrieval_attempt={context_response.retrieval_attempt}): {context_response.function_results}...",
@@ -226,8 +227,8 @@ class PatchingAgent(RoutedAgent):
     # Class variable to store instances by their key (shared across all instances)
     _instances_dict = {}
     
-    def __init__(self, description: str, model_client: ChatCompletionClient, information: InfoDict, role_description: dict[str, str]):
-        super().__init__(description)
+    def __init__(self, model_client: ChatCompletionClient, information: InfoDict, role_description: dict[str, str]):
+        super().__init__("Patching Agent")
         # create OpenAI chat completion client
         self._model_client = model_client
 
@@ -310,13 +311,13 @@ class PatchingAgent(RoutedAgent):
     
     # When TestingAgent sends a test result, add it to the conversation context
     # This does not happen automatically, so we need to add it manually
-    async def add_test_result(self, test_result: str, success: bool, source: str = "testing"):
+    async def add_test_result(self, test_str_result: str, success: bool, source: str = "testing"):
         """Add a test result to the conversation context"""
         # Format the test result message
         if success:
-            result_message = f"All test suites passed. Here are the testing results: {test_result}"
+            result_message = f"All test suites passed. Here are the testing results: {test_str_result}"
         else:
-            result_message = f"One or more test suites failed. Here are the testing results: {test_result}"
+            result_message = f"One or more test suites failed. Here are the testing results: {test_str_result}"
         
         # Use the general log_message utility function
         await helpers.log_message(
@@ -347,8 +348,8 @@ class PatchingAgent(RoutedAgent):
 # TODO: for the purposes of keeping the prompt short, remove the failing test function.
 # Just the failing line +/- 5-ish lines should be enough
 class TestingAgent(RoutedAgent):
-    def __init__(self, description: str, information: InfoDict):
-        super().__init__(description)
+    def __init__(self, information: InfoDict):
+        super().__init__("Testing Agent")
         self.information = information
     
     @message_handler
@@ -361,6 +362,7 @@ class TestingAgent(RoutedAgent):
         test_result = ts.run_defects4j_test(project_name, bug_id, working_directory, mapping)
 
         failing_test_info_string = ""
+        test_info_list = []
         all_tests_passed = True
 
         # test_result is a dict with keys 'success' and 'failing_tests'
@@ -378,18 +380,19 @@ class TestingAgent(RoutedAgent):
                 project_name = self.information.get_info("project name")
                 bug_id = self.information.get_info("bug id")
                 working_dir = os.path.join(checkout_dir, f"{project_name.lower()}{bug_id}")
-                failing_test_info_string += ts.get_failing_test_info(working_dir, project_name, test_result['failing_tests'])
+                test_info_string, test_info_list = ts.get_failing_test_info(working_dir, project_name, test_result['failing_tests'])
+                failing_test_info_string += test_info_string
                 failing_test_info_string += '\n'
         
         if all_tests_passed:
-            return TestingResponse(patcher_id=message.patcher_id, success=True, result="All test suites passed.")
+            return TestingResponse(patcher_id=message.patcher_id, success=True, str_result="All test suites passed.", list_result=[])
         else:
-            return TestingResponse(patcher_id=message.patcher_id, success=False, result=failing_test_info_string)
+            return TestingResponse(patcher_id=message.patcher_id, success=False, str_result=failing_test_info_string, list_result=test_info_list)
 
 
 class ContextRetrievalAgent(RoutedAgent):
-    def __init__(self, description: str, model_client: ChatCompletionClient, context_info: ContextDict, role_description: str, past_summary: str, information: InfoDict):
-        super().__init__(description)
+    def __init__(self, model_client: ChatCompletionClient, context_info: ContextDict, role_description: str, past_summary: str, information: InfoDict):
+        super().__init__("Context Retrieval Agent")
         self.context_info = context_info
         self.information = information
         self._model_client = model_client
@@ -465,8 +468,7 @@ class ContextRetrievalAgent(RoutedAgent):
 
     @message_handler
     async def on_task(self, message: ContextRetrievalTask, ctx: MessageContext) -> ContextRetrievalResponse:
-        # Initialize
-        # Wrap in list since OpenAI API expects tools to be a list
+        # Initialize tools, wrap in list since OpenAI API expects tools to be a list
         tools = [create_context_retrieval_function()]
         max_rounds = 3  # Each attempt consists of up to 3 rounds
         all_retrieval_results = ""  # String for logging (not used in final response)
@@ -474,6 +476,10 @@ class ContextRetrievalAgent(RoutedAgent):
         # Loop through rounds internally (up to 3 rounds per attempt)
         round = 1
         while round <= max_rounds:
+            
+            # Add round 2 functions (similar_lines_of_code, similar_function_name) at the start of round 2
+            if round == 2:
+                self.context_info.add_round2_functions()
 
             # Call LLM for this round
             messages = await self._context.get_messages()
@@ -517,6 +523,7 @@ class ContextRetrievalAgent(RoutedAgent):
             file_functions = args.get("file_functions", {})
             reasoning = args.get("reasoning", "")  # LLM's reasoning for why it selected these functions
             #TODO: figure out better way to pass function arguments
+            # TODO: figure out selected_methods and 2-hop expansion
             selected_methods = args.get("selected_methods", [])  # For 2-hop API expansion
             
             # Validate that file_functions was provided (it's required in the schema)
@@ -649,11 +656,14 @@ class ContextRetrievalAgent(RoutedAgent):
         if function_name == "comment_retrieval":
             return cr_funcs.comment_retrieval(file_path, start_line, end_line)
         elif function_name == "similar_lines_of_code":
-            return f"similar_lines_of_code called successfully for {file_path} with bug location ({start_line}, {end_line})"
+            if class_name is None:
+                return f"ERROR: similar_lines_of_code requires class_name but could not extract it from {file_path} at lines {start_line}-{end_line}"
+            return cr_funcs.top_k_code_snippets(file_path, start_line, end_line, class_name, self.information, self.context_info)
         elif function_name == "similar_function_name":
-            return f"similar_function_name called successfully for {file_path} with bug location ({start_line}, {end_line})"
-        elif function_name == "all_funcs_in_class":
-            return cr_funcs.all_funcs_in_class(file_path, start_line, end_line, self.information)
+            if class_name is None:
+                return f"ERROR: similar_function_name requires class_name but could not extract it from {file_path} at lines {start_line}-{end_line}"
+            _, formatted_results_str = cr_funcs.top_k_class_signatures(file_path, start_line, end_line, class_name, self.information, self.context_info)
+            return formatted_results_str
         elif function_name == "all_variables_in_class":
             return f"all_variables_in_class called successfully for {file_path} with bug location ({start_line}, {end_line})"
         elif function_name == "test_failure_check":
@@ -681,8 +691,8 @@ class ContextRetrievalAgent(RoutedAgent):
 class SummaryAgent(RoutedAgent):
     """Agent that summarizes context retrieval results."""
     
-    def __init__(self, description: str, model_client: ChatCompletionClient):
-        super().__init__(description)
+    def __init__(self, model_client: ChatCompletionClient):
+        super().__init__("Summary Agent")
         self._model_client = model_client
         
         # System message for SummaryAgent

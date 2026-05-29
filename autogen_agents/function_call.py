@@ -1,16 +1,8 @@
 """
-Sample program demonstrating function calling workflow for ContextRetrievalAgent.
-
-This shows how:
-1. Function schemas are defined
-2. Multi-round context retrieval works
-3. Function calls are executed and results stored
-4. Summary is generated at the end
+https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/components/tools.html
+This file only contains the function schema definition
+The actual ContextRetrievalAgent implementation is in agents.py
 """
-
-import json
-from typing import Dict, List, Any
-
 
 def create_context_retrieval_function():
     """Create the function schema for OpenAI function calling"""
@@ -56,6 +48,3 @@ def create_context_retrieval_function():
             "required": ["file_functions", "reasoning"]
         }
     }
-
-# This file only contains the function schema definition
-# The actual ContextRetrievalAgent implementation is in agents.py
