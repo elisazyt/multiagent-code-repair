@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 from typing import Optional
 from openai import AsyncOpenAI
@@ -6,41 +7,45 @@ from autogen_core import AgentId, MessageContext, RoutedAgent, message_handler
 from autogen_core.models import ChatCompletionClient, SystemMessage, UserMessage, AssistantMessage
 from autogen_core.model_context import UnboundedChatCompletionContext
 
-from data_classes import PatchingTask, PatchingResponse, TestingTask, TestingResponse, ContextRetrievalTask, ContextRetrievalResponse, SummaryTask, SummaryResponse
-import agent_helpers as helpers
-
-from info_dict import InfoDict, ContextDict
-import patch_utils as p_utils
-
-from function_call import create_context_retrieval_function
-
-import cr_functions as cr_funcs
-
-# Add parent directory to path to import test_suites
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# Add the context_retrieval directory to the path
-sys.path.append(os.path.join(parent_dir, 'context_retrieval'))
-sys.path.insert(0, parent_dir)
-from test_suites import test_suites as ts
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+from agents.data_structures.data_classes import (
+    PatchingTask,
+    PatchingResponse,
+    TestingTask,
+    TestingResponse,
+    ContextRetrievalTask,
+    ContextRetrievalResponse,
+    SummaryTask,
+    SummaryResponse,
+)
+from agents.helpers import agent_helpers as helpers
+from agents.data_structures.dicts import BugDict, ContextDict
+from agents.helpers import patch_utils
+from agents.helpers.function_call import create_context_retrieval_function
+from agents.helpers import cr_functions as cr_funcs
+
+from tools.test_suites import test_suites as ts
 
 
 class AdminAgent(RoutedAgent):
-    def __init__(self, receiver_instances: dict[str, list[AgentId]], system_message: SystemMessage, context_info: ContextDict = None, runtime = None):
+    def __init__(self, receiver_instances: dict[str, list[AgentId]], system_message: SystemMessage, context_dict: ContextDict = None, runtime = None):
         super().__init__("Admin Agent")
         self.patching_instances = receiver_instances.get("patching", [])
         self.testing_instances = receiver_instances.get("testing", [])
         self.context_instances = receiver_instances.get("context", [])
         self.summary_instances = receiver_instances.get("summary", [])
-        self.context_info = context_info
+        self.context_dict = context_dict
         self._runtime = runtime  # Store as private attribute since runtime is a read-only property
         
-        # Context for logging all messages that pass through AdminAgent
-        # Initialize with system message as the first message
-        self._context = UnboundedChatCompletionContext(initial_messages=[system_message])
+        # LLM chat history for logging all messages that pass through AdminAgent
+        self.chat_messages = UnboundedChatCompletionContext(initial_messages=[system_message])
     
-    def get_context(self) -> UnboundedChatCompletionContext:
-        """Get the message context for logging/debugging"""
-        return self._context
+    def get_chat_messages(self) -> UnboundedChatCompletionContext:
+        """Get the LLM chat message history for logging/debugging"""
+        return self.chat_messages
 
     @message_handler
     async def process_patching_tasks(self, message: PatchingTask, ctx: MessageContext) -> PatchingResponse:
@@ -53,7 +58,7 @@ class AdminAgent(RoutedAgent):
         # Log incoming patching task (source is the sender, or "main" if None)
         sender_key = ctx.sender.key if ctx.sender else "main"
         await helpers.log_message(
-            self._context,
+            self.chat_messages,
             f"PatchingTask (patcher_id={message.patcher_id}): {message.message}",
             role="user",
             source=sender_key
@@ -71,12 +76,12 @@ class AdminAgent(RoutedAgent):
         if not patching_instance:
             raise ValueError(f"No patching instance found for patcher_id: {message.patcher_id}")
 
-        # For now, the task is predefined. Later, we will pass in some InfoDict or similar object and construct the prompt
+        # For now, the task is predefined. Later, we will pass in some BugDict or similar object and construct the prompt
         patching_response = await self.send_message(message, patching_instance)
         
         # Log patching response (source is the patching agent that generated it)
         await helpers.log_message(
-            self._context,
+            self.chat_messages,
             f"PatchingResponse (patcher_id={patching_response.patcher_id}): {patching_response.result}",
             role="assistant",
             source=patching_response.patcher_id
@@ -89,7 +94,7 @@ class AdminAgent(RoutedAgent):
         # Log incoming testing task (source is the sender, or "main" if None)
         sender_key = ctx.sender.key if ctx.sender else "main"
         await helpers.log_message(
-            self._context,
+            self.chat_messages,
             f"TestingTask (patcher_id={message.patcher_id}): Test the patch with mapping {message.mapping}",
             role="user",
             source=sender_key
@@ -99,7 +104,7 @@ class AdminAgent(RoutedAgent):
         
         # Log testing response (source is the testing agent)
         await helpers.log_message(
-            self._context,
+            self.chat_messages,
             f"TestingResponse (patcher_id={testing_response.patcher_id}, success={testing_response.success}): {testing_response.str_result}",
             role="assistant",
             source="testing"
@@ -113,7 +118,7 @@ class AdminAgent(RoutedAgent):
         # Log incoming context retrieval task (source is the sender, or "main" if None)
         sender_key = ctx.sender.key if ctx.sender else "main"
         await helpers.log_message(
-            self._context,
+            self.chat_messages,
             f"ContextRetrievalTask (retrieval_attempt={message.retrieval_attempt}): Retrieve context for bug fixing",
             role="user",
             source=sender_key
@@ -127,7 +132,7 @@ class AdminAgent(RoutedAgent):
         # Log context retrieval response (the full, raw response)
         # Note: this will later be condensed into a summary when we send it in a prompt to the patching agent
         await helpers.log_message(
-            self._context,
+            self.chat_messages,
             f"ContextRetrievalResponse (retrieval_attempt={context_response.retrieval_attempt}): {context_response.function_results}...",
             role="assistant",
             source="context"
@@ -140,7 +145,7 @@ class AdminAgent(RoutedAgent):
         # Log incoming summary task (source is the sender, or "main" if None)
         sender_key = ctx.sender.key if ctx.sender else "main"
         await helpers.log_message(
-            self._context,
+            self.chat_messages,
             f"SummaryTask (retrieval_attempt={message.retrieval_attempt}): Summarize context retrieval results",
             role="user",
             source=sender_key
@@ -153,7 +158,7 @@ class AdminAgent(RoutedAgent):
         
         # Log summary response
         await helpers.log_message(
-            self._context,
+            self.chat_messages,
             f"SummaryResponse (retrieval_attempt={message.retrieval_attempt}): {summary_response.summary}",
             role="assistant",
             source="summary"
@@ -171,15 +176,15 @@ class AdminAgent(RoutedAgent):
         # Log incoming context patching task
         sender_key = ctx.sender.key if ctx.sender else "main"
         await helpers.log_message(
-            self._context,
+            self.chat_messages,
             f"ContextPatchingTask (patcher_id={message.patcher_id}): {message.message}",
             role="user",
             source=sender_key
         )
         
         # Step 1: Run context retrieval to get context summary for this patching attempt
-        if not self.context_info or not self._runtime:
-            raise ValueError("context_info and runtime must be provided to AdminAgent for context patching")
+        if not self.context_dict or not self._runtime:
+            raise ValueError("context_dict and runtime must be provided to AdminAgent for context patching")
         
         # Use the patching attempt number as the attempt number for context retrieval
         # Each patching attempt gets its own context retrieval attempt (up to 3 rounds of retrieval)
@@ -189,7 +194,7 @@ class AdminAgent(RoutedAgent):
             attempt_num=attempt_num,
             admin_agent=self.id,
             runtime=self._runtime,
-            context_info=self.context_info
+            context_dict=self.context_dict
         )
         print(f"[context_patching] Context retrieval completed for attempt {attempt_num}. Summary length: {len(context_summary)} characters")
         
@@ -214,7 +219,7 @@ class AdminAgent(RoutedAgent):
         
         # Log patching response
         await helpers.log_message(
-            self._context,
+            self.chat_messages,
             f"PatchingResponse (patcher_id={patching_response.patcher_id}): {patching_response.result}",
             role="assistant",
             source=patching_response.patcher_id
@@ -227,12 +232,12 @@ class PatchingAgent(RoutedAgent):
     # Class variable to store instances by their key (shared across all instances)
     _instances_dict = {}
     
-    def __init__(self, model_client: ChatCompletionClient, information: InfoDict, role_description: dict[str, str]):
+    def __init__(self, model_client: ChatCompletionClient, bug_dict: BugDict, role_description: dict[str, str]):
         super().__init__("Patching Agent")
         # create OpenAI chat completion client
         self._model_client = model_client
 
-        self.information = information
+        self.bug_dict = bug_dict
         
         # role_description can be a string or a dict mapping agent keys to role description strings
         # If it's a dict, look up the role description based on self.id.key (set by super().__init__)
@@ -244,11 +249,10 @@ class PatchingAgent(RoutedAgent):
         
         # Create system message with the role description
         # For context patching agent, context_summary will be added as a UserMessage in on_task
-        self._system_message = helpers.get_system_message(information, self._role_description)
+        self._system_message = helpers.get_system_message(bug_dict, self._role_description)
         
-        # Each agent instance has its own conversation context (manages history automatically)
-        # Initialize with system message as the first message
-        self._context = UnboundedChatCompletionContext(initial_messages=[self._system_message])
+        # Each agent instance has its own LLM chat history (manages messages automatically)
+        self.chat_messages = UnboundedChatCompletionContext(initial_messages=[self._system_message])
 
     @message_handler
     # When runtime.send_message is called with an argument of type Task, this on_task method is called
@@ -262,11 +266,11 @@ class PatchingAgent(RoutedAgent):
         # This is for context patching agent
         if message.context_summary:
             # Get existing messages to preserve conversation history
-            existing_messages = await self._context.get_messages()
+            existing_messages = await self.chat_messages.get_messages()
             
             # Recreate system message with context summary
             self._system_message = helpers.get_system_message(
-                self.information, 
+                self.bug_dict, 
                 self._role_description, 
                 context_summary=message.context_summary
             )
@@ -274,7 +278,7 @@ class PatchingAgent(RoutedAgent):
             # Recreate context with new system message, preserving all non-system messages
             # Filter out the old system message and keep everything else
             other_messages = [msg for msg in existing_messages if not isinstance(msg, SystemMessage)]
-            self._context = UnboundedChatCompletionContext(initial_messages=[self._system_message] + other_messages)
+            self.chat_messages = UnboundedChatCompletionContext(initial_messages=[self._system_message] + other_messages)
         
         # Create UserMessage for this request
         # Use the actual sender's key (e.g., "admin_agent") instead of receiver's key
@@ -284,10 +288,10 @@ class PatchingAgent(RoutedAgent):
         user_message = UserMessage(content=formatted_content, source=sender_key)
         
         # Add user message to context (context automatically tracks it)
-        await self._context.add_message(user_message)
+        await self.chat_messages.add_message(user_message)
         
         # Get all messages from context (includes system + all history automatically)
-        messages = await self._context.get_messages()
+        messages = await self.chat_messages.get_messages()
         
         # Call LLM with full conversation history
         llm_result = await self._model_client.create(
@@ -304,7 +308,7 @@ class PatchingAgent(RoutedAgent):
         
         # Add assistant response to context (for next round)
         assistant_message = AssistantMessage(content=result_text, source=self.id.key)
-        await self._context.add_message(assistant_message)
+        await self.chat_messages.add_message(assistant_message)
 
         # Return the patch mapping - AdminAgent will handle sending to TestingAgent
         return PatchingResponse(patcher_id=self.id.key, result=result_text, mapping=patch_mapping)
@@ -317,20 +321,19 @@ class PatchingAgent(RoutedAgent):
         if success:
             result_message = f"All test suites passed. Here are the testing results: {test_str_result}"
         else:
-            result_message = f"One or more test suites failed. Here are the testing results: {test_str_result}"
+            result_message = f"One or more test suites failed, or was unable to run. Here are the testing results: {test_str_result}"
         
         # Use the general log_message utility function
         await helpers.log_message(
-            self._context,
+            self.chat_messages,
             f"Feedback from test suites: {result_message}",
             role="user",
             source=source
         )
 
-    # TODO: consider making this a helper function rather than an instance method
     def save_patch(self, response: str) -> dict[str, str]:
         """
-        Save patches to files and return mapping of modified_source_name -> patch_file_path.
+        Save patches to a temporary directory and return mapping of modified_source_name -> patch_file_path.
         
         Args:
             response: The agent's response containing markdown code blocks
@@ -338,28 +341,55 @@ class PatchingAgent(RoutedAgent):
         Returns:
             dict[str, str]: Mapping from modified_source_name to patch_file_path
         """
-        bug_files_and_locations = self.information.get_info("bug files and locations")
-        unique_node_locations_per_file = self.information.get_info("unique node locations per file")
-        # Use self.id.key (e.g., "basic", "cot") as the agent role for patch file naming
-        patch_mapping = p_utils.apply_all_patches(bug_files_and_locations, response, self.id.key, unique_node_locations_per_file)
+        bug_files_and_locations = self.bug_dict.get_info("bug files and locations")
+        unique_node_locations_per_file = self.bug_dict.get_info("unique node locations per file")
+        # create a temporary directory specific to the current bug + agent
+        temp_dir = os.path.join(
+            self.bug_dict.get_info("temporary patch path"),
+            self.id.key,
+        )
+        if os.path.isdir(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        os.makedirs(temp_dir, exist_ok=True)
+        try:
+            patch_mapping = patch_utils.apply_all_patches(
+                bug_files_and_locations,
+                response,
+                self.id.key,
+                unique_node_locations_per_file,
+                temp_patches_dir=temp_dir,
+            )
+        except Exception as e:
+            print(f"[ERROR] Failed to apply patches for {self.id.key}: {e}")
+            patch_mapping = {}
+        if not patch_mapping:
+            shutil.rmtree(temp_dir, ignore_errors=True)
         return patch_mapping
 
 
 # TODO: for the purposes of keeping the prompt short, remove the failing test function.
 # Just the failing line +/- 5-ish lines should be enough
 class TestingAgent(RoutedAgent):
-    def __init__(self, information: InfoDict):
+    def __init__(self, bug_dict: BugDict):
         super().__init__("Testing Agent")
-        self.information = information
+        self.bug_dict = bug_dict
     
     @message_handler
     async def on_task(self, message: TestingTask, ctx: MessageContext) -> TestingResponse:        
         mapping = message.mapping
 
-        project_name = self.information.get_info("project name")
-        bug_id = self.information.get_info("bug id")
-        working_directory = self.information.get_info("working directory")
-        test_result = ts.run_defects4j_test(project_name, bug_id, working_directory, mapping)
+        project_name = self.bug_dict.get_info("project name")
+        bug_id = self.bug_dict.get_info("bug id")
+        # create separate checkout directory for each patching agent
+        # to ensure there is no conflict when running tests in parallel
+        agent_checkout_dir = os.path.join(
+            self.bug_dict.get_info("defects4j checkout root"),
+            message.patcher_id,
+        )
+        reference_dir = self.bug_dict.get_info("defects4j reference checkout path")
+        test_result = ts.run_defects4j_test(
+            project_name, bug_id, agent_checkout_dir, mapping, reference_dir
+        )
 
         failing_test_info_string = ""
         test_info_list = []
@@ -375,90 +405,96 @@ class TestingAgent(RoutedAgent):
                 failing_test_info_string += 'Error: Test command did not run. Check for possible errors such as undefined function calls, compile errors, etc.'
             if len(test_result['failing_tests']) > 0:
                 all_tests_passed = False
-                # Reconstruct working_dir from checkout_dir, project_name, and bug_id
-                checkout_dir = self.information.get_info("working directory")
-                project_name = self.information.get_info("project name")
-                bug_id = self.information.get_info("bug id")
-                working_dir = os.path.join(checkout_dir, f"{project_name.lower()}{bug_id}")
-                test_info_string, test_info_list = ts.get_failing_test_info(working_dir, project_name, test_result['failing_tests'])
+                test_info_string, test_info_list = ts.get_failing_test_info(agent_checkout_dir, project_name, test_result['failing_tests'])
                 failing_test_info_string += test_info_string
                 failing_test_info_string += '\n'
-        
+
+        # remove the temporary directory after testing is finished
+        temp_dir = os.path.join(
+            self.bug_dict.get_info("temporary patch path"),
+            message.patcher_id,
+        )
+        if os.path.isdir(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
         if all_tests_passed:
             return TestingResponse(patcher_id=message.patcher_id, success=True, str_result="All test suites passed.", list_result=[])
         else:
             return TestingResponse(patcher_id=message.patcher_id, success=False, str_result=failing_test_info_string, list_result=test_info_list)
 
 
+def is_valid_format(file_functions) -> bool:
+    """True if file_functions matches {file_path: [{func_name: {args}}, ...]}."""
+    if not isinstance(file_functions, dict) or not file_functions:
+        return False
+    for func_calls in file_functions.values():
+        if not isinstance(func_calls, list) or not func_calls:
+            return False
+        for entry in func_calls:
+            if not isinstance(entry, dict) or len(entry) != 1:
+                return False
+            _, args = next(iter(entry.items()))
+            if not isinstance(args, dict):
+                return False
+    return True
+
+
 class ContextRetrievalAgent(RoutedAgent):
-    def __init__(self, model_client: ChatCompletionClient, context_info: ContextDict, role_description: str, past_summary: str, information: InfoDict):
+    def __init__(self, model_client: ChatCompletionClient, context_dict: ContextDict, role_description: str, past_summary: str, bug_dict: BugDict):
         super().__init__("Context Retrieval Agent")
-        self.context_info = context_info
-        self.information = information
+        self.context_dict = context_dict
+        self.bug_dict = bug_dict
         self._model_client = model_client
 
         # Initialize CPG if Joern configuration is available
-        self._initialize_cpg()
+        self.initialize_cpg()
 
         # Build system message with bug information (if available) and past context
         system_message_content = role_description + "\n\n"
         system_message_content += "You are given the following context information about the bug:\n"
-        system_message_content += helpers.format_bug_info(information) + "\n\n"
-        system_message_content += helpers.format_past_context(context_info, past_summary, information)
+        system_message_content += helpers.format_bug_info(bug_dict) + "\n\n"
+        system_message_content += helpers.format_past_context(context_dict, past_summary, bug_dict)
         
         system_message = SystemMessage(content=system_message_content)
-        self._context = UnboundedChatCompletionContext(initial_messages=[system_message])
+        self.chat_messages = UnboundedChatCompletionContext(initial_messages=[system_message])
     
-    def _initialize_cpg(self):
+    def initialize_cpg(self):
         """Initialize Joern CPG for the project if it doesn't already exist."""
         import os
-        from context_retrieval.joern_session import JoernSession
+        from tools.context_retrieval.parsing_retrieval_funcs.joern_session import JoernSession
         
-        # Get Joern configuration from InfoDict
-        joern_executable = self.information.get_info("joern executable")
-        joern_directory = self.information.get_info("joern directory")
-        joern_github_dir = os.getenv('JOERN_GITHUB_DIR')
+        # Get Joern configuration from BugDict
+        joern_executable = self.bug_dict.get_info("joern executable")
         
         # Get project info
-        project_name = self.information.get_info("project name")
-        bug_id = self.information.get_info("bug id")
-        checkout_dir = self.information.get_info("working directory")
+        project_name = self.bug_dict.get_info("project name")
+        bug_id = self.bug_dict.get_info("bug id")
+        reference_checkout_dir = self.bug_dict.get_info("defects4j reference checkout path")
         
         # Get the first Java file path (for JoernSession initialization)
-        bug_locations = self.information.get_info("bug files and locations")
+        bug_locations = self.bug_dict.get_info("bug files and locations")
         if not bug_locations:
-            return  # No bug locations, skip CPG creation
-        
-        first_file_path = bug_locations[0][0]  # (file_path, modified_source_name, bug_locations_list)
-        cpg_project_name = f"{project_name}{bug_id}"
-        
-        # Check if we have all required configuration
-        if not (joern_executable and joern_directory and joern_github_dir and checkout_dir):
-            print(f"[CPG] WARNING: Joern configuration incomplete. CPG creation skipped.")
-            if not joern_executable:
-                print("  Missing: joern executable")
-            if not joern_directory:
-                print("  Missing: joern directory")
-            if not joern_github_dir:
-                print("  Missing: JOERN_GITHUB_DIR environment variable")
-            if not checkout_dir:
-                print("  Missing: working directory")
             return
+
+        joern_workspace_path = self.bug_dict.get_info("joern workspace path")
         
         # Check if CPG already exists
-        cpg_path = os.path.join(joern_directory, 'workspace', cpg_project_name, 'cpg.bin.zip')
+        cpg_path = os.path.join(joern_workspace_path, "cpg.bin.zip")
         if os.path.exists(cpg_path):
             print(f"[CPG] CPG already exists at {cpg_path}, skipping creation")
             return
         
         # Create CPG
         print(f"[CPG] CPG not found at {cpg_path}, creating it...")
-        joern_session = JoernSession(first_file_path, joern_executable, joern_directory)
+        joern_session = JoernSession(
+            joern_executable,
+            joern_workspace_path,
+            self.bug_dict.get_info("joern working dir"),
+        )
         success = joern_session.create_cpg_from_defects4j(
             project_name=project_name,
             bug_id=bug_id,
-            checkout_dir=checkout_dir,
-            joern_github_dir=joern_github_dir
+            reference_checkout_dir=reference_checkout_dir,
         )
         
         if not success:
@@ -479,10 +515,10 @@ class ContextRetrievalAgent(RoutedAgent):
             
             # Add round 2 functions (similar_lines_of_code, similar_function_name) at the start of round 2
             if round == 2:
-                self.context_info.add_round2_functions()
+                self.context_dict.add_round2_functions()
 
             # Call LLM for this round
-            messages = await self._context.get_messages()
+            messages = await self.chat_messages.get_messages()
             llm_result = await self._model_client.create(
                 messages=messages,
                 tools=tools,
@@ -525,19 +561,20 @@ class ContextRetrievalAgent(RoutedAgent):
             #TODO: figure out better way to pass function arguments
             # TODO: figure out selected_methods and 2-hop expansion
             selected_methods = args.get("selected_methods", [])  # For 2-hop API expansion
-            
-            # Validate that file_functions was provided (it's required in the schema)
-            if not file_functions:
-                await self._context.add_message(UserMessage(
-                    content=f"Error in Round {round}: The function call is missing the required 'file_functions' parameter. Your reasoning was: {reasoning}. "
-                    f"If you do not want to retrieve any more context, respond with text (e.g., 'I have enough context') instead of calling the function. "
-                    f"If you do want to retrieve context, please call the function again with 'file_functions' included.",
-                    source="system"
+
+            if not is_valid_format(file_functions):
+                await self.chat_messages.add_message(UserMessage(
+                    content=(
+                        f"Error in Round {round}: Function requests were returned in the wrong format. "
+                        f"See the example in the system prompt: each file path must map to a list of function calls, "
+                        f"e.g. \"file.java\": [{{\"comment_retrieval\": {{\"start_line\": 1, \"end_line\": 2}}}}]. "
+                        f"Your reasoning was: {reasoning}."
+                    ),
+                    source="system",
                 ))
-                print(f"[WARNING] Round {round} - LLM called function but didn't provide 'file_functions' (required). Reasoning: {reasoning}")
-                # Don't increment round - let LLM retry in the same round
+                print(f"[WARNING] Round {round} - Invalid file_functions format: {file_functions}")
                 continue
-            
+
             # Debug: Show what LLM actually requested vs what it said in reasoning
             all_requested = []
             for file_path, func_calls in file_functions.items():
@@ -549,7 +586,7 @@ class ContextRetrievalAgent(RoutedAgent):
             print(f"[DEBUG] Round {round} - Parsed file_functions dict: {file_functions}")
             
             # Validate file paths and functions
-            available_functions_dict = self.context_info.get_available_functions()
+            available_functions_dict = self.context_dict.get_available_functions()
             valid_file_paths = set(available_functions_dict.keys())
             
             # Process each file and its requested functions
@@ -588,23 +625,23 @@ class ContextRetrievalAgent(RoutedAgent):
                 for function_name, result in executed_functions.items():
                     # Only remove if it was successfully executed (not an error message)
                     if not isinstance(result, str) or not result.startswith("ERROR:"):
-                        self.context_info.remove_function(function_name, file_path)
+                        self.context_dict.remove_function(function_name, file_path)
             
             # Add state summary at the END of the round (after results are stored)
             # Format current round results as string and append to all_retrieval_results
             # Pass only the current round's results (as a list with one element) and the round number
-            current_round_results_string = helpers.format_current_context([current_round_results], reasoning, self.context_info, round_num=round)
-            await self._context.add_message(UserMessage(content=current_round_results_string, source="system"))
+            current_round_results_string = helpers.format_current_context([current_round_results], reasoning, self.context_dict, round_num=round)
+            await self.chat_messages.add_message(UserMessage(content=current_round_results_string, source="system"))
             all_retrieval_results += current_round_results_string
             
             # Check if any functions are still available - if not, break early
-            available_functions_dict = self.context_info.get_available_functions()
+            available_functions_dict = self.context_dict.get_available_functions()
             # Check if any file has any available functions
             has_available = any(funcs for funcs in available_functions_dict.values())
             
             if not has_available:
                 # No functions available - break early
-                await self._context.add_message(UserMessage(
+                await self.chat_messages.add_message(UserMessage(
                     content="No more context retrieval functions are available. All functions have been called.",
                     source="system"
                 ))
@@ -639,14 +676,14 @@ class ContextRetrievalAgent(RoutedAgent):
         end_line = function_args.get("end_line")
         variable = function_args.get("var")
         
-        # Get class name for functions that need it (e.g., get_callees)
+        # Get class name for functions that need it (e.g., get_callers)
         # Use tree-sitter when line numbers are available for accurate class detection
         class_name = None
         if start_line is not None and end_line is not None:
             try:
-                import isolate_bug as ib
+                from tools.context_retrieval.parsing_retrieval_funcs import tree_sitter_utils
                 bug_location = (start_line, end_line)
-                class_name = ib.extract_class_name_from_file(file_path, bug_location)
+                class_name = tree_sitter_utils.extract_class_name_from_file(file_path, bug_location)
             except ValueError as e:
                 # If class name extraction fails, log warning but continue
                 # Some functions don't require class_name, so we'll handle it per function
@@ -658,32 +695,26 @@ class ContextRetrievalAgent(RoutedAgent):
         elif function_name == "similar_lines_of_code":
             if class_name is None:
                 return f"ERROR: similar_lines_of_code requires class_name but could not extract it from {file_path} at lines {start_line}-{end_line}"
-            return cr_funcs.top_k_code_snippets(file_path, start_line, end_line, class_name, self.information, self.context_info)
+            return cr_funcs.top_k_code_snippets(file_path, start_line, end_line, class_name, self.bug_dict, self.context_dict)
         elif function_name == "similar_function_name":
             if class_name is None:
                 return f"ERROR: similar_function_name requires class_name but could not extract it from {file_path} at lines {start_line}-{end_line}"
-            _, formatted_results_str = cr_funcs.top_k_class_signatures(file_path, start_line, end_line, class_name, self.information, self.context_info)
+            _, formatted_results_str = cr_funcs.top_k_class_signatures(file_path, start_line, end_line, class_name, self.bug_dict, self.context_dict)
             return formatted_results_str
-        elif function_name == "all_variables_in_class":
-            return f"all_variables_in_class called successfully for {file_path} with bug location ({start_line}, {end_line})"
-        elif function_name == "test_failure_check":
-            return f"test_failure_check called successfully for {file_path} (no arguments needed)"
+        elif function_name == "all_funcs_in_class":
+            if start_line is None or end_line is None:
+                return f"ERROR: all_funcs_in_class requires start_line and end_line arguments. Provided: start_line={start_line}, end_line={end_line}"
+            return cr_funcs.all_funcs_in_class(file_path, start_line, end_line, self.bug_dict)
         elif function_name == "one_hop_api_retrieval":
             if start_line is None or end_line is None or variable is None:
                 return f"ERROR: one_hop_api_retrieval requires start_line, end_line, and var arguments. Provided: start_line={start_line}, end_line={end_line}, var={variable}"
-            return cr_funcs.one_hop_api_retrieval(file_path, start_line, end_line, variable, self.information)
+            return cr_funcs.one_hop_api_retrieval(file_path, start_line, end_line, variable, self.bug_dict)
         elif function_name == "get_callers":
             if start_line is None or end_line is None:
                 return f"ERROR: get_callers requires start_line and end_line arguments. Provided: start_line={start_line}, end_line={end_line}"
             if class_name is None:
                 return f"ERROR: get_callers requires class_name but could not extract it from {file_path} at lines {start_line}-{end_line}"
-            return cr_funcs.get_callers(file_path, start_line, end_line, self.information, class_name)
-        elif function_name == "get_callees":
-            if start_line is None or end_line is None:
-                return f"ERROR: get_callees requires start_line and end_line arguments. Provided: start_line={start_line}, end_line={end_line}"
-            if class_name is None:
-                return f"ERROR: get_callees requires class_name but could not extract it from {file_path} at lines {start_line}-{end_line}"
-            return cr_funcs.get_callees(file_path, start_line, end_line, self.information, class_name)
+            return cr_funcs.get_callers(file_path, start_line, end_line, self.bug_dict, class_name)
         else:
             return f"Unknown function: {function_name} for {file_path}"
 
@@ -723,7 +754,7 @@ IMPORTANT FORMATTING NOTES:
 
 Format the summary clearly and concisely.""")
         
-        self._context = UnboundedChatCompletionContext(initial_messages=[system_message])
+        self.chat_messages = UnboundedChatCompletionContext(initial_messages=[system_message])
     
     @message_handler
     async def on_task(self, message: SummaryTask, ctx: MessageContext) -> SummaryResponse:
@@ -758,10 +789,10 @@ IMPORTANT FORMATTING NOTES:
             content=instruction_content,
             source="system"
         )
-        await self._context.add_message(instruction_message)
+        await self.chat_messages.add_message(instruction_message)
         
         # Get all messages (including system message and added messages)
-        messages = await self._context.get_messages()
+        messages = await self.chat_messages.get_messages()
         
         # Call LLM
         llm_result = await self._model_client.create(
@@ -773,6 +804,6 @@ IMPORTANT FORMATTING NOTES:
         
         # Add assistant response to context
         assistant_message = AssistantMessage(content=summary, source=self.id.key)
-        await self._context.add_message(assistant_message)
+        await self.chat_messages.add_message(assistant_message)
         
         return SummaryResponse(summary=summary)

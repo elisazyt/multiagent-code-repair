@@ -2,19 +2,15 @@ import sys
 import os
 from typing import List, Tuple
 
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+parent_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from context_retrieval import isolate_bug as ib
-import context_retrieval.retrieval_utils as utils
-from context_retrieval.joern_session import JoernSession
-import bm25_rag.bm25_code_snippets as bm25_cs
-from bm25_rag.unixcoder_rag import embed_code_snippets, embed_bug_location, get_top_k_code_snippets
-try:
-    from .info_dict import InfoDict, ContextDict
-except ImportError:
-    from info_dict import InfoDict, ContextDict
+from tools.context_retrieval.parsing_retrieval_funcs import tree_sitter_utils as utils
+import tools.context_retrieval.parsing_retrieval_funcs.cr_function_implementations as functions
+from tools.context_retrieval.parsing_retrieval_funcs.joern_session import JoernSession
+import tools.context_retrieval.parsing_retrieval_funcs.joern_utils as joern_utils
+from agents.data_structures.dicts import BugDict, ContextDict
 
 
 def comment_retrieval(java_file_path: str, start_line: int, end_line: int) -> str:
@@ -32,19 +28,19 @@ def comment_retrieval(java_file_path: str, start_line: int, end_line: int) -> st
     try:
         # Get the buggy node from the location using tree-sitter
         bug_location = (start_line, end_line)
-        buggy_node_result = ib.retrieve_buggy_node(java_file_path, bug_location)
+        buggy_node_result = utils.retrieve_buggy_node(java_file_path, bug_location)
         
         if buggy_node_result is None:
             return f"ERROR: Could not find a node containing the bug location ({start_line}, {end_line}) in {java_file_path}"
         
-        buggy_node_location, buggy_node = buggy_node_result
+        _, buggy_node = buggy_node_result
         
         # Read the file to get code bytes
         with open(java_file_path, 'rb') as f:
             code = f.read()
         
         # Get comments before the node
-        comments_before_node = utils.get_comments_before_node(java_file_path, buggy_node)
+        comments_before_node = functions.get_comments_before_node(java_file_path, buggy_node)
         
         if comments_before_node:
             comments_text = utils.get_node_text(comments_before_node, code)
@@ -57,7 +53,8 @@ def comment_retrieval(java_file_path: str, start_line: int, end_line: int) -> st
     except Exception as e:
         return f"ERROR: Failed to retrieve comments: {str(e)}"
 
-def top_k_class_signatures(java_file_path: str, start_line: int, end_line: int, class_name: str, info_dict: InfoDict, context_dict: ContextDict) -> Tuple[List[str], str]:
+
+def all_funcs_in_class(java_file_path: str, start_line: int, end_line: int, bug_dict) -> str:
     """
     Retrieve all methods in the class containing the bug location.
     
@@ -65,8 +62,58 @@ def top_k_class_signatures(java_file_path: str, start_line: int, end_line: int, 
         java_file_path: Path to the Java file
         start_line: Start line of the bug location (1-indexed)
         end_line: End line of the bug location (1-indexed)
+        bug_dict: BugDict to get Joern config and project info
+    
+    Returns:
+        String containing all method signatures in the class, or error message
+    """
+    try:
+        bug_location = (start_line, end_line)
+        
+        # Get Joern configuration from BugDict
+        joern_executable = bug_dict.get_info("joern executable")
+        joern_working_dir = bug_dict.get_info("joern working dir")
+        project_name = bug_dict.get_info("project name")
+        bug_id = bug_dict.get_info("bug id")
+        cpg_project_name = f"{project_name}{bug_id}"
+        joern_workspace_path = bug_dict.get_info("joern workspace path")
+        
+        # Initialize JoernSession
+        joern_session = JoernSession(joern_executable, joern_workspace_path, joern_working_dir)
+        
+        # Load CPG (assumes CPG already exists)
+        if not joern_session.load_cpg(cpg_project_name):
+            return f"ERROR: Could not load CPG for project '{cpg_project_name}'. Make sure CPG is created first."
+        
+        signatures = functions.get_full_signatures_in_buggy_class(joern_session, java_file_path, bug_location)
+        
+        if not signatures:
+            return f"No methods found in class containing bug location ({start_line}, {end_line})"
+        
+        # Format the results
+        result = f"All methods in class containing bug location ({start_line}, {end_line}):\n"
+        for i, func_signature in enumerate(signatures, 1):
+            result += f"  {i}. {func_signature}\n"
+        
+        return result
+        
+    except FileNotFoundError:
+        return f"ERROR: File {java_file_path} not found"
+    except Exception as e:
+        return f"ERROR: Failed to retrieve methods in class: {str(e)}"
+
+
+def top_k_class_signatures(java_file_path: str, start_line: int, end_line: int, class_name: str, bug_dict: BugDict, context_dict: ContextDict) -> Tuple[List[str], str]:
+    """
+    Retrieve top k signatures in the buggy class that are most similar to the signature
+    of the buggy function, using BM25.
+    
+    Args:
+        java_file_path: Path to the Java file
+        start_line: Start line of the bug location (1-indexed)
+        end_line: End line of the bug location (1-indexed)
         class_name: Class name
-        info_dict: InfoDict containing bug info, Joern config, BM25 directories
+        bug_dict: BugDict containing bug info, Joern config, BM25 directories
         context_dict: ContextDict containing BM25/UniXcoder configs
     
     Returns:
@@ -79,25 +126,26 @@ def top_k_class_signatures(java_file_path: str, start_line: int, end_line: int, 
         # Get k from ContextDict
         k = context_dict.get_info("k (signatures)")
         
-        # Get Joern configuration from InfoDict
-        joern_executable = info_dict.get_info("joern executable")
-        joern_directory = info_dict.get_info("joern directory")
-        project_name = info_dict.get_info("project name")
-        bug_id = info_dict.get_info("bug id")
+        # Get Joern configuration from BugDict
+        joern_executable = bug_dict.get_info("joern executable")
+        joern_working_dir = bug_dict.get_info("joern working dir")
+        project_name = bug_dict.get_info("project name")
+        bug_id = bug_dict.get_info("bug id")
         cpg_project_name = f"{project_name}{bug_id}"
+        joern_workspace_path = bug_dict.get_info("joern workspace path")
         
-        joern_session = JoernSession(java_file_path, joern_executable, joern_directory)
+        joern_session = JoernSession(joern_executable, joern_workspace_path, joern_working_dir)
 
         if not joern_session.load_cpg(cpg_project_name):
             error_msg = f"ERROR: Could not load CPG for project '{cpg_project_name}'. Make sure CPG is created first."
             return ([], error_msg)
         
-        full_signatures = joern_session.get_full_signatures_in_buggy_class(java_file_path, bug_location)
+        full_signatures = functions.get_full_signatures_in_buggy_class(joern_session, java_file_path, bug_location)
         if not full_signatures:
             print("WARNING: No signatures found in class. Returning empty list.")
             return ([], "WARNING: No signatures found in class.")
 
-        test_info_list = context_dict.test_info
+        test_info_list = context_dict.get_info("test info")
         if not test_info_list:
             test_info_list = [{
                 'failing test': "",
@@ -106,15 +154,17 @@ def top_k_class_signatures(java_file_path: str, start_line: int, end_line: int, 
                 'buggy line': ""
             }]
 
-        buggy_sig = joern_session.get_full_method_signature_from_line_numbers(java_file_path, bug_location, class_name)
+        buggy_sig = joern_utils.get_full_method_signature_from_line_numbers(joern_session, java_file_path, bug_location, class_name)
         if not buggy_sig:
             print(f"WARNING: Could not find method signature at bug location {bug_location}")
             return ([], f"WARNING: Could not find method signature at bug location {bug_location}")
 
-        index_path = bm25_cs.make_index(full_signatures, info_dict, context_dict)
+        from tools.context_retrieval.bm25_rag import bm25_search as search
+
+        index_path = search.make_index(full_signatures, bug_dict, context_dict)
 
         # Request k+1 results in case the buggy signature is in the top k
-        results = bm25_cs.search(k + 1, test_info_list, buggy_sig, index_path, class_name=class_name)
+        results = search.search(k + 1, test_info_list, buggy_sig, index_path, class_name=class_name)
         if not results:
             return ([], "ERROR: BM25 search returned no results.")
 
@@ -140,57 +190,7 @@ def top_k_class_signatures(java_file_path: str, start_line: int, end_line: int, 
         return ([], error_msg)
 
 
-# TODO: don't return as str, return as list. we use this in top k code snippets and for getting all
-# callable APIs/funcs.
-def all_funcs_in_class(java_file_path: str, start_line: int, end_line: int, information) -> str:
-    """
-    Retrieve all methods in the class containing the bug location.
-    
-    Args:
-        java_file_path: Path to the Java file
-        start_line: Start line of the bug location (1-indexed)
-        end_line: End line of the bug location (1-indexed)
-        information: InfoDict to get Joern config and project info
-    
-    Returns:
-        String containing all method signatures in the class, or error message
-    """
-    try:
-        bug_location = (start_line, end_line)
-        
-        # Get Joern configuration from InfoDict
-        joern_executable = information.get_info("joern executable")
-        joern_directory = information.get_info("joern directory")
-        project_name = information.get_info("project name")
-        bug_id = information.get_info("bug id")
-        cpg_project_name = f"{project_name}{bug_id}"
-        
-        # Initialize JoernSession
-        joern_session = JoernSession(java_file_path, joern_executable, joern_directory)
-        
-        # Load CPG (assumes CPG already exists)
-        if not joern_session.load_cpg(cpg_project_name):
-            return f"ERROR: Could not load CPG for project '{cpg_project_name}'. Make sure CPG is created first."
-        
-        functions = joern_session.get_full_signatures_in_buggy_class(java_file_path, bug_location)
-        
-        if not functions:
-            return f"No methods found in class containing bug location ({start_line}, {end_line})"
-        
-        # Format the results
-        result = f"All methods in class containing bug location ({start_line}, {end_line}):\n"
-        for i, func_signature in enumerate(functions, 1):
-            result += f"  {i}. {func_signature}\n"
-        
-        return result
-        
-    except FileNotFoundError:
-        return f"ERROR: File {java_file_path} not found"
-    except Exception as e:
-        return f"ERROR: Failed to retrieve methods in class: {str(e)}"
-
-
-def top_k_code_snippets(java_file_path: str, start_line: int, end_line: int, class_name: str, info_dict: InfoDict, context_dict: ContextDict) -> str:
+def top_k_code_snippets(java_file_path: str, start_line: int, end_line: int, class_name: str, bug_dict: BugDict, context_dict: ContextDict) -> str:
     """
     Retrieve top k code snippets using two-stage retrieval:
     1. BM25 to get top k signatures
@@ -201,7 +201,7 @@ def top_k_code_snippets(java_file_path: str, start_line: int, end_line: int, cla
         start_line: Start line of the bug location (1-indexed)
         end_line: End line of the bug location (1-indexed)
         class_name: Class name
-        info_dict: InfoDict containing bug info, Joern config, BM25 directories
+        bug_dict: BugDict containing bug info, Joern config, BM25 directories
         context_dict: ContextDict containing BM25/UniXcoder configs
     
     Returns:
@@ -214,27 +214,34 @@ def top_k_code_snippets(java_file_path: str, start_line: int, end_line: int, cla
         batch_size = context_dict.get_info("batch size")
         
         # Stage 1: BM25 to get top k signatures
-        top_k_signatures, formatted_sigs = top_k_class_signatures(java_file_path, start_line, end_line, class_name, info_dict, context_dict)
+        top_k_signatures, formatted_sigs = top_k_class_signatures(java_file_path, start_line, end_line, class_name, bug_dict, context_dict)
         
         # Check if there was an error (error message in formatted_sigs)
         if formatted_sigs.startswith("ERROR:") or formatted_sigs.startswith("WARNING:"):
             return formatted_sigs
         
-        # Get Joern configuration from InfoDict
-        joern_executable = info_dict.get_info("joern executable")
-        joern_directory = info_dict.get_info("joern directory")
-        project_name = info_dict.get_info("project name")
-        bug_id = info_dict.get_info("bug id")
+        # Get Joern configuration from BugDict
+        joern_executable = bug_dict.get_info("joern executable")
+        joern_working_dir = bug_dict.get_info("joern working dir")
+        project_name = bug_dict.get_info("project name")
+        bug_id = bug_dict.get_info("bug id")
         cpg_project_name = f"{project_name}{bug_id}"
+        joern_workspace_path = bug_dict.get_info("joern workspace path")
         
         # Initialize JoernSession
-        joern_session = JoernSession(java_file_path, joern_executable, joern_directory)
+        joern_session = JoernSession(joern_executable, joern_workspace_path, joern_working_dir)
         
         if not joern_session.load_cpg(cpg_project_name):
             return f"ERROR: Could not load CPG for project '{cpg_project_name}'. Make sure CPG is created first."
         
         # Get method bodies from signatures
-        method_bodies = joern_session.get_method_bodies_from_signatures_batch(java_file_path, top_k_signatures)
+        from tools.context_retrieval.bm25_rag.unixcoder_rag import (
+            embed_code_snippets,
+            embed_bug_location,
+            get_top_k_code_snippets,
+        )
+
+        method_bodies = joern_utils.get_method_bodies_from_signatures_batch(joern_session, java_file_path, top_k_signatures)
         method_embeddings, method_line_ranges = embed_code_snippets(method_bodies, window_size, batch_size)
         query_embedding = embed_bug_location(java_file_path, (start_line, end_line))
 
@@ -249,7 +256,7 @@ def top_k_code_snippets(java_file_path: str, start_line: int, end_line: int, cla
     except Exception as e:
         return f"ERROR: Failed to retrieve top k code snippets: {str(e)}"
 
-def one_hop_api_retrieval(java_file_path: str, start_line: int, end_line: int, variable_name: str, information: ContextDict) -> str:
+def one_hop_api_retrieval(java_file_path: str, start_line: int, end_line: int, variable_name: str, bug_dict: BugDict) -> str:
     """
     Retrieve 1-hop APIs callable on the specified variable.
     
@@ -258,7 +265,7 @@ def one_hop_api_retrieval(java_file_path: str, start_line: int, end_line: int, v
         start_line: Start line of the bug location (1-indexed) where the variable is used
         end_line: End line of the bug location (1-indexed) where the variable is used
         variable_name: Name of the variable to retrieve 1-hop APIs for
-        information: InfoDict to get Joern config and project info
+        bug_dict: BugDict to get Joern config and project info
     
     Returns:
         String containing the 1-hop APIs callable on the specified variable, or error message
@@ -266,16 +273,17 @@ def one_hop_api_retrieval(java_file_path: str, start_line: int, end_line: int, v
     try:
         bug_location = (start_line, end_line)
         
-        # Get Joern configuration from InfoDict
-        joern_executable = information.get_info("joern executable")
-        joern_directory = information.get_info("joern directory")
-        project_name = information.get_info("project name")
-        bug_id = information.get_info("bug id")
-        checkout_dir = information.get_info("working directory")
+        # Get Joern configuration from BugDict
+        joern_executable = bug_dict.get_info("joern executable")
+        joern_working_dir = bug_dict.get_info("joern working dir")
+        project_name = bug_dict.get_info("project name")
+        bug_id = bug_dict.get_info("bug id")
+        reference_checkout_dir = bug_dict.get_info("defects4j reference checkout path")
         cpg_project_name = f"{project_name}{bug_id}"
+        joern_workspace_path = bug_dict.get_info("joern workspace path")
         
         # Initialize JoernSession
-        joern_session = JoernSession(java_file_path, joern_executable, joern_directory)
+        joern_session = JoernSession(joern_executable, joern_workspace_path, joern_working_dir)
         
         # Load CPG (assumes CPG already exists)
         if not joern_session.load_cpg(cpg_project_name):
@@ -283,7 +291,7 @@ def one_hop_api_retrieval(java_file_path: str, start_line: int, end_line: int, v
         
         # Get APIs for the variable using get_apis_from_var
         # This function will first get the variable type, then retrieve APIs for that type
-        apis = joern_session.get_apis_from_var(java_file_path, variable_name, bug_location, project_name, bug_id, checkout_dir)
+        apis = functions.get_apis_from_var(joern_session, java_file_path, variable_name, bug_location, reference_checkout_dir)
         
         if not apis:
             return f"No APIs found for variable '{variable_name}' at bug location ({start_line}, {end_line}). The variable type may not be found or may not have any methods."
@@ -302,7 +310,7 @@ def one_hop_api_retrieval(java_file_path: str, start_line: int, end_line: int, v
         return f"ERROR: Failed to retrieve 1-hop APIs: {str(e)}"
 
 
-def get_callers(java_file_path: str, start_line: int, end_line: int, information, class_name: str) -> str:
+def get_callers(java_file_path: str, start_line: int, end_line: int, bug_dict, class_name: str) -> str:
     """
     Retrieve callers (places where the function at bug location is called).
     
@@ -310,7 +318,7 @@ def get_callers(java_file_path: str, start_line: int, end_line: int, information
         java_file_path: Path to the Java file
         start_line: Start line of the bug location (1-indexed)
         end_line: End line of the bug location (1-indexed)
-        information: InfoDict to get Joern config and project info
+        bug_dict: BugDict to get Joern config and project info
         class_name: Class name (e.g., "CategoryPlot") to filter method signature lookup
     
     Returns:
@@ -319,22 +327,23 @@ def get_callers(java_file_path: str, start_line: int, end_line: int, information
     try:
         bug_location = (start_line, end_line)
         
-        # Get Joern configuration from InfoDict
-        joern_executable = information.get_info("joern executable")
-        joern_directory = information.get_info("joern directory")
-        project_name = information.get_info("project name")
-        bug_id = information.get_info("bug id")
+        # Get Joern configuration from BugDict
+        joern_executable = bug_dict.get_info("joern executable")
+        joern_working_dir = bug_dict.get_info("joern working dir")
+        project_name = bug_dict.get_info("project name")
+        bug_id = bug_dict.get_info("bug id")
         cpg_project_name = f"{project_name}{bug_id}"
+        joern_workspace_path = bug_dict.get_info("joern workspace path")
         
         # Initialize JoernSession
-        joern_session = JoernSession(java_file_path, joern_executable, joern_directory)
+        joern_session = JoernSession(joern_executable, joern_workspace_path, joern_working_dir)
         
         # Load CPG (assumes CPG already exists)
         if not joern_session.load_cpg(cpg_project_name):
             return f"ERROR: Could not load CPG for project '{cpg_project_name}'. Make sure CPG is created first."
         
         # Get callers of the function at bug location
-        callers = joern_session.get_function_callers(java_file_path, bug_location, class_name)
+        callers = functions.get_function_callers(joern_session, java_file_path, bug_location, class_name)
         
         if not callers:
             return f"No callers found for function at bug location ({start_line}, {end_line})"
@@ -354,7 +363,7 @@ def get_callers(java_file_path: str, start_line: int, end_line: int, information
 
 '''
 # TODO: figure out if we need this. most likely just delete it
-def get_callees(java_file_path: str, start_line: int, end_line: int, information, class_name: str) -> str:
+def get_callees(java_file_path: str, start_line: int, end_line: int, bug_dict, class_name: str) -> str:
     """
     Retrieve callees (method calls) at the bug location.
     
@@ -362,7 +371,7 @@ def get_callees(java_file_path: str, start_line: int, end_line: int, information
         java_file_path: Path to the Java file
         start_line: Start line of the bug location (1-indexed)
         end_line: End line of the bug location (1-indexed)
-        information: InfoDict to get Joern config and project info
+        bug_dict: BugDict to get Joern config and project info
         class_name: Class name (e.g., "CategoryPlot") to filter by file name.
                    Filters results to calls in files ending with "{class_name}.java"
     
@@ -372,15 +381,16 @@ def get_callees(java_file_path: str, start_line: int, end_line: int, information
     try:
         bug_location = (start_line, end_line)
         
-        # Get Joern configuration from InfoDict
-        joern_executable = information.get_info("joern executable")
-        joern_directory = information.get_info("joern directory")
-        project_name = information.get_info("project name")
-        bug_id = information.get_info("bug id")
+        # Get Joern configuration from BugDict
+        joern_executable = bug_dict.get_info("joern executable")
+        joern_working_dir = bug_dict.get_info("joern working dir")
+        project_name = bug_dict.get_info("project name")
+        bug_id = bug_dict.get_info("bug id")
         cpg_project_name = f"{project_name}{bug_id}"
+        joern_workspace_path = bug_dict.get_info("joern workspace path")
         
         # Initialize JoernSession
-        joern_session = JoernSession(java_file_path, joern_executable, joern_directory)
+        joern_session = JoernSession(joern_executable, joern_workspace_path, joern_working_dir)
         
         # Load CPG (assumes CPG already exists)
         if not joern_session.load_cpg(cpg_project_name):

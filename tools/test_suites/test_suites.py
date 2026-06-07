@@ -1,31 +1,29 @@
 import os
 import subprocess
-import sys
 from typing import List, Dict, Tuple
 
-# Add parent directory to path for absolute imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-# Add test_suites directory to path for imports
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from tools.test_suites import test_suites_helpers as tsh
+import tools.defects4j_utils as d4j_utils
+from tools.context_retrieval.parsing_retrieval_funcs import tree_sitter_utils as utils
 
-import test_suites_helpers as tsh
-try:
-    import context_retrieval.retrieval_utils as cr
-except ImportError:
-    # For testing, make this optional
-    cr = None
+# Note that these all run in Java 11, which is handled in tools.defects4j_utils.get_java11_env()
 
-# Java 11 environment is handled in test_suites_helpers._get_java11_env()
-
-def run_defects4j_test(project_name: str, version: str, checkout_dir: str, java_patch_files: dict[str, str]) -> dict:
+def run_defects4j_test(
+    project_name: str,
+    bug_id: str,
+    agent_checkout_dir: str,
+    java_patch_files: dict[str, str],
+    reference_dir: str,
+) -> dict:
     '''
-    Run the test suite for a given project and version.
+    Run the test suite for a given project and bug ID.
     
     Parameters:
     - project_name: Project name (e.g., 'Chart', 'Closure', 'Math')
-    - version: Bug version (e.g., '2', '3', '4')
-    - checkout_dir: Base directory where Defects4J checkouts are stored
+    - bug_id: Bug ID (e.g., '2', '3', '4')
+    - agent_checkout_dir: Defects4J project root for this specific agent (e.g. .../Closure3/basic)
     - java_patch_files: Dict containing entries in the form of {modified source name: path to java patch file}
+    - reference_dir: Unchanged checkout directory to copy from (e.g. .../Closure3/reference_checkout)
 
     Returns:
     - dict containing:
@@ -33,25 +31,13 @@ def run_defects4j_test(project_name: str, version: str, checkout_dir: str, java_
         - 'failing_tests': list of failing test names
         - 'error': str (only present if an error occurred)
     '''
-    # Checkout project
-    success = tsh.checkout_defects4j_project(project_name, version, checkout_dir)
-    if not success:
-        # Try resetting once as a last resort (in case checkout is corrupted)
-        print(f"Initial checkout failed. Attempting reset and retry...")
-        reset_success = tsh.reset_checkout(project_name, version, checkout_dir)
-        if not reset_success:
-            return {'error': 'Failed to reset checkout'}
-        # Try checkout again after reset
-        success = tsh.checkout_defects4j_project(project_name, version, checkout_dir)
-        if not success:
-            return {'error': 'Failed to checkout project even after reset'}
-    
-    working_dir = os.path.join(checkout_dir, f"{project_name.lower()}{version}")
-    
+    if not tsh.reset_checkout(reference_dir, agent_checkout_dir):
+        return {'error': 'Failed to reset agent checkout'}
+
     # Apply all patches first
-    modified_sources = tsh.get_modified_sources(project_name, version)
+    modified_sources = d4j_utils.get_modified_sources(project_name, bug_id)
     for modified_source in modified_sources:
-        full_source_path = tsh.get_full_source_path(project_name, working_dir, modified_source)
+        full_source_path = tsh.get_full_source_path(project_name, agent_checkout_dir, modified_source)
         
         if modified_source not in java_patch_files:
             return {'error': f'Missing mapping for modified source: {modified_source}'}
@@ -60,14 +46,14 @@ def run_defects4j_test(project_name: str, version: str, checkout_dir: str, java_
     
     # Run the test command once after all patches are applied
     result = subprocess.run(
-        ['defects4j', 'test', '-w', working_dir],
+        ['defects4j', 'test', '-w', agent_checkout_dir],
         capture_output=True,
         text=True,
-        cwd=working_dir,
-        env=tsh._get_java11_env()
+        cwd=agent_checkout_dir,
+        env=d4j_utils.get_java11_env()
     )
     # Debug: confirm the test command execution and surface key info
-    print(f"[DEBUG] Ran: defects4j test -w {working_dir}")
+    print(f"[DEBUG] Ran: defects4j test -w {agent_checkout_dir}")
     print(f"[DEBUG] Return code: {result.returncode}")
     if result.stderr:
         print("[DEBUG] stderr (first 300 chars):")
@@ -86,7 +72,7 @@ def run_defects4j_test(project_name: str, version: str, checkout_dir: str, java_
     if return_code != 0:
         print(f"Test command failed (return code {return_code}). This likely indicates a compile error from the patch.")
         print(f"Resetting checkout to clean state...")
-        reset_success = tsh.reset_checkout(project_name, version, checkout_dir)
+        reset_success = tsh.reset_checkout(reference_dir, agent_checkout_dir)
         if not reset_success:
             return {'error': 'Failed to reset checkout after compile error'}
     
@@ -104,7 +90,6 @@ def run_defects4j_test(project_name: str, version: str, checkout_dir: str, java_
         'success': return_code == 0,
         'failing_tests': failing_tests
     }
-
 
 # Call this function if success code is 0
 def get_failing_test_info(working_dir: str, project_name: str, failing_tests: List[str]) -> Tuple[str, List[Dict[str, str]]]:
@@ -174,24 +159,20 @@ def get_failing_test_info(working_dir: str, project_name: str, failing_tests: Li
             with open(test_path, 'rb') as f:
                 code = f.read()
             
-            if cr is None:
-                buggy_method = "context_retrieval module not available"
-                buggy_method_with_marker = "context_retrieval module not available"
-                buggy_line = "context_retrieval module not available"
+            method_node = utils.retrieve_method_node_by_name(test_path, method_name)
+            if method_node:
+                print(f"[DEBUG] Successfully found method '{method_name}' in {test_path}")
+                buggy_method = utils.get_node_text(method_node, code)
+                buggy_method_with_marker = tsh.mark_failing_line_in_method(
+                    buggy_method, line_number, method_node.start_point[0] + 1
+                )
+                buggy_line = utils.retrieve_code_by_line_number(test_path, (line_number, line_number))
             else:
-                method_node = cr.retrieve_method_by_name(test_path, method_name)
-                if method_node:
-                    print(f"[DEBUG] Successfully found method '{method_name}' in {test_path}")
-                    buggy_method = cr.get_node_text(method_node, code)
-                    # Mark the failing line in the full method with line numbers
-                    buggy_method_with_marker = cr.mark_failing_line_in_method(buggy_method, line_number, method_node.start_point[0] + 1)
-                    buggy_line = cr.retrieve_code_by_line_number(test_path, (line_number, line_number))
-                else:
-                    print(f"[DEBUG] Method '{method_name}' NOT found in {test_path}")
-                    print(f"[DEBUG]   File exists: {os.path.exists(test_path)}")
-                    buggy_method = "not found"
-                    buggy_method_with_marker = "not found"
-                    buggy_line = "not found"
+                print(f"[DEBUG] Method '{method_name}' NOT found in {test_path}")
+                print(f"[DEBUG]   File exists: {os.path.exists(test_path)}")
+                buggy_method = "not found"
+                buggy_method_with_marker = "not found"
+                buggy_line = "not found"
 
         test_info = {
             'failing test': test_identifier,

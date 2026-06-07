@@ -5,19 +5,19 @@ import subprocess
 from typing import Any, List, Dict
 from pyserini.search.lucene import LuceneSearcher
 
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-from autogen_agents.info_dict import InfoDict, ContextDict
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+from agents.data_structures.dicts import BugDict, ContextDict
 from . import bm25_utils as utils
 
-def make_index(signatures_list: List[str], info_dict: InfoDict, context_dict: ContextDict):
+def make_index(signatures_list: List[str], bug_dict: BugDict, context_dict: ContextDict):
     """
     Builds an index for a given set of documents using Pyserini.
 
     Args:
         signatures_list: List[str], obtained by calling full_signatures_in_buggy_class
-        info_dict: InfoDict - For project name, bug id
+        bug_dict: BugDict - For project name, bug id
         context_dict: ContextDict - For BM25 directories (jsonl_dir, index_dir)
     
     Returns:
@@ -34,8 +34,8 @@ def make_index(signatures_list: List[str], info_dict: InfoDict, context_dict: Co
     os.makedirs(index_dir, exist_ok=True)
 
     # Create the actual JSONL file
-    project_name = info_dict.get_info("project name")
-    bug_id = info_dict.get_info("bug id")
+    project_name = bug_dict.get_info("project name")
+    bug_id = bug_dict.get_info("bug id")
     jsonl_file_path = os.path.join(jsonl_dir, f"index_{project_name}_{bug_id}.jsonl")
 
     # Create subdirectory for this specific index

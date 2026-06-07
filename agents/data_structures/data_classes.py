@@ -1,5 +1,3 @@
-# TODO: transfer InfoDict here and integrate with the current architecture
-
 from dataclasses import dataclass
 
 
@@ -22,13 +20,11 @@ class PatchingResponse:
     result: str
     # mapping is the mapping of (modified_source_name, patch_file_path) to send to the testing agent
     mapping: dict[str, str]
-    # TODO: add patch directory to send to testing agent
 
 @dataclass
 class TestingTask:
     # patcher_id is the id of the PatchingAgent whose patch is being tested (i.e., "basic", "cot")
     patcher_id: str
-    # TODO: check to confirm this is true
     # mapping is the mapping of (modified_source_name, patch_file_path)
     mapping: dict[str, str]
 
@@ -51,9 +47,6 @@ class ContextRetrievalTask:
     # Attempt number (e.g., 1, 2, 3) - each attempt consists of up to 3 rounds internally
     # Used by SummaryAgent to label the summary
     retrieval_attempt: int  # Actually represents attempt number, not round number
-    # Optional summary of past repair attempts (from SummaryAgent)
-    # Everything else (available functions, retrieved context) is stored in ContextDict
-    repair_summary: str = ""
 
 @dataclass
 # send this response to the summary agent? this agent will format the context nicely into a string

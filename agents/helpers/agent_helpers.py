@@ -5,20 +5,26 @@ from typing import Tuple
 from autogen_core import AgentId, SingleThreadedAgentRuntime
 from autogen_core.models import SystemMessage, UserMessage, AssistantMessage
 from autogen_core.model_context import UnboundedChatCompletionContext
-from data_classes import PatchingTask, TestingTask, TestingResponse, ContextRetrievalTask, SummaryTask
-from info_dict import InfoDict, ContextDict
 
-# Add the context_retrieval directory to the path
-sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'context_retrieval'))
-import isolate_bug as ib
-import retrieval_utils as r_utils
+parent_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+from agents.data_structures.data_classes import (
+    PatchingTask,
+    TestingTask,
+    ContextRetrievalTask,
+    SummaryTask,
+)
+from agents.data_structures.dicts import BugDict, ContextDict
+from tools.context_retrieval.parsing_retrieval_funcs import tree_sitter_utils as utils
 
 
 ########################################################
 # Helper functions for running one round of patching and testing
 ########################################################
 # TODO: For now, run 2 rounds. may need to change later
-async def run_patch_test_loop(patcher_id: str, message: str, admin_agent: AgentId, context_dict: ContextDict, runtime: SingleThreadedAgentRuntime, num_rounds=2):
+async def run_patch_test_loop(patcher_id: str, message: str, admin_agent: AgentId, runtime: SingleThreadedAgentRuntime, num_rounds=2, context_dict=None):
     print(f"[{patcher_id}] Loop started!")
     round = 1
 
@@ -34,38 +40,52 @@ async def run_patch_test_loop(patcher_id: str, message: str, admin_agent: AgentI
         patching_response = await runtime.send_message(patching_task, recipient=admin_agent)
         print(f"[{patcher_id}] Round {round} - Patching result: {patching_response.result}")
 
-        # Test the patch
-        testing_task = TestingTask(
-            patcher_id=patcher_id,
-            mapping=patching_response.mapping
-        )
-        testing_response = await runtime.send_message(testing_task, recipient=admin_agent)
-        
-        # Add test result to PatchingAgent's context for future regeneration
-        # Import here to avoid circular dependency
-        from agents import PatchingAgent
-        if patcher_id in PatchingAgent._instances_dict:
-            await PatchingAgent._instances_dict[patcher_id].add_test_result(
-                testing_response.str_result, 
-                testing_response.success,
-                source="testing"  # TestingAgent's key
+        from agents.agents import PatchingAgent
+        patcher_agent = PatchingAgent._instances_dict.get(patcher_id)
+
+        # If there is no mapping, the patch wasn't applied correctly
+        if not patching_response.mapping:
+            patch_error = (
+                "Patch was not applied. The response must contain exactly one ```java code block "
+                "for each unique buggy node (see system prompt). Check that every block is "
+                "enclosed in ``` and that you did not combine multiple nodes into one block."
             )
-        
-        if testing_response.success:
-            print(f"[{patcher_id}] Test passed: {testing_response.str_result}")
-            # TODO: save the patch as a candidate
-            break
+            print(f"[{patcher_id}] Round {round} - {patch_error}")
+            if patcher_agent:
+                await patcher_agent.add_test_result(patch_error, False, source="system")
         else:
-            context_dict.add_test_info(testing_response.list_result)
-        
+            # Test the patch
+            testing_task = TestingTask(
+                patcher_id=patcher_id,
+                mapping=patching_response.mapping,
+            )
+            testing_response = await runtime.send_message(testing_task, recipient=admin_agent)
+            
+            # Add test result to PatchingAgent's context for future regeneration
+            await patcher_agent.add_test_result(
+                testing_response.str_result,
+                testing_response.success,
+                source="testing",
+            )
+
+            if testing_response.success:
+                print(f"[{patcher_id}] Test passed: {testing_response.str_result}")
+                # TODO: save the patch as a candidate
+                break
+            # Only the context retrieval agent passes in context_dict as an arg because it needs access to the
+            # failing test info to construct the prompt for the next patching attempt, all other patching agents
+            # don't need this so we set the default value context_dict=None
+            elif context_dict is not None:
+                context_dict.add_info("test info", testing_response.list_result)
+
         round += 1
-    
+
     # Return the number of rounds completed
     # If we broke early, round is the correct number. If we completed all rounds, round is num_rounds + 1
     return round if round <= num_rounds else num_rounds
 
 
-async def run_single_attempt_context(attempt_num: int, admin_agent: AgentId, runtime: SingleThreadedAgentRuntime, context_info: ContextDict) -> str:
+async def run_single_attempt_context(attempt_num: int, admin_agent: AgentId, runtime: SingleThreadedAgentRuntime, context_dict: ContextDict) -> str:
     """
     Run a single ATTEMPT of context retrieval (consists of up to 3 rounds).
     
@@ -82,7 +102,7 @@ async def run_single_attempt_context(attempt_num: int, admin_agent: AgentId, run
         attempt_num: The attempt number (1, 2, 3, etc.) - each attempt has up to 3 rounds
         admin_agent: AgentId for AdminAgent
         runtime: SingleThreadedAgentRuntime instance
-        context_info: ContextDict to get past summaries and store current summary
+        context_dict: ContextDict to get past summaries and store current summary
         
     Returns:
         The final summary string (with past summaries prepended)
@@ -91,12 +111,12 @@ async def run_single_attempt_context(attempt_num: int, admin_agent: AgentId, run
     
     # Step 1: Send ContextRetrievalTask to AdminAgent
     # Note: retrieval_attempt in ContextRetrievalTask refers to the attempt number
-    context_task = ContextRetrievalTask(retrieval_attempt=attempt_num, repair_summary="")
+    context_task = ContextRetrievalTask(retrieval_attempt=attempt_num)
     context_response = await runtime.send_message(context_task, recipient=admin_agent)
     print(f"[context] Attempt {attempt_num} - Context retrieval completed (all rounds done)")
     
     # Step 2: Get past summaries from ContextDict
-    past_summaries = context_info.get_retrieved_context()
+    past_summaries = context_dict.get_retrieved_context()
     
     # Step 3: Send SummaryTask to AdminAgent (which will route to SummaryAgent)
     # SummaryAgent will summarize all 3 rounds from this attempt
@@ -128,7 +148,7 @@ async def run_single_attempt_context(attempt_num: int, admin_agent: AgentId, run
     
     # Step 5: Store only the current attempt summary (without past summaries and without "Current attempt:" prefix) 
     # in ContextDict for future attempts. This way, when we prepend past summaries later, we don't duplicate them.
-    context_info.add_retrieved_context_round(summary_response.summary)
+    context_dict.add_retrieved_context_round(summary_response.summary)
     
     return final_summary
 
@@ -137,11 +157,11 @@ async def run_single_attempt_context(attempt_num: int, admin_agent: AgentId, run
 # Helper functions for getting and formatting information
 ########################################################
 
-def get_system_message(information: InfoDict, role_description: str, context_summary: str = "") -> SystemMessage:
+def get_system_message(bug_dict: BugDict, role_description: str, context_summary: str = "") -> SystemMessage:
         msg = f"""{role_description}
 
 You are given the following context information about the bug:\n"""
-        msg += format_bug_info(information)
+        msg += format_bug_info(bug_dict)
 
         # Add context summary if provided (for context patching agent)
         if context_summary:
@@ -178,46 +198,46 @@ You are given the following context information about the bug:\n"""
         
         return SystemMessage(content=msg)
 
-def format_bug_info(information: InfoDict) -> str:
+def format_bug_info(bug_dict: BugDict) -> str:
     """Format bare minimum bug information without additional analysis"""
-    bug_locations = information.get_info("bug files and locations")
+    bug_locations = bug_dict.get_info("bug files and locations")
     result = ''
     bug_number = 1  # Track bug number sequentially across all files and nodes
 
     # Reset stored node locations (will be populated during formatting)
-    information.info_dict["unique node locations per file"] = []
+    bug_dict.add_info("unique node locations per file", [])
 
     # Iterate through each file
     # Structure: (file_path, modified_source_name, bug_locations_list)
     for buggy_file_info in bug_locations:
         # Use the helper method to format bugs grouped by unique nodes
         # Returns: (formatted_string, next_bug_number)
-        formatted_bugs, next_bug_number = format_bugs_grouped_by_node(buggy_file_info, information, bug_number)
+        formatted_bugs, next_bug_number = format_bugs_grouped_by_node(buggy_file_info, bug_dict, bug_number)
         result += formatted_bugs
         bug_number = next_bug_number  # Continue bug numbering across files
         
     return result
 
-def format_bugs_grouped_by_node(buggy_file_info, information: InfoDict, start_number: int = 1) -> Tuple[str, int]:
+def format_bugs_grouped_by_node(buggy_file_info, bug_dict: BugDict, start_number: int = 1) -> Tuple[str, int]:
     """
-    Format bugs grouped by unique buggy nodes. Returns (formatted_string, next_bug_number).
-    Also stores unique node locations in InfoDict to avoid recomputing later.
+    Format all bugs in one file, grouped by unique buggy nodes. Returns (formatted_string, next_bug_number).
+    Also stores unique node locations in BugDict to avoid recomputing later.
     
     Args:
         buggy_file_info: Tuple of (java_file_path, modified_source_name, bug_locations_list)
-        information: InfoDict object to store unique node locations
+        bug_dict: BugDict object to store unique node locations
         start_number: Starting bug number
         
     Returns:
         Tuple of (formatted_string, next_bug_number)
     """
     # Extract file info from tuple
-    java_file_path, modified_source_name, bug_locations_list = buggy_file_info
+    java_file_path, _, bug_locations_list = buggy_file_info
     
     # Read file and retrieve bugs
     with open(java_file_path, 'rb') as f:
         code = f.read()
-    bugs_in_file = ib.retrieve_buggy_lines_and_node(java_file_path, bug_locations_list)
+    bugs_in_file = utils.retrieve_buggy_lines_and_node(java_file_path, bug_locations_list)
     
     result = ''
     node_number = 1
@@ -234,16 +254,12 @@ def format_bugs_grouped_by_node(buggy_file_info, information: InfoDict, start_nu
             unique_nodes[buggy_node_location] = []
         unique_nodes[buggy_node_location].append(bug_in_file)
     
-    # Store unique node locations in InfoDict for later use in apply_all_patches
+    # Store unique node locations in BugDict for later use in apply_all_patches
     # This avoids calling retrieve_buggy_lines_and_node again (which is slow)
     # Structure: List[List[Tuple[int, int]]] - one list per file, each containing sorted node locations
-    # Initialize the list if this is the first file being processed
-    if "unique node locations per file" not in information.info_dict:
-        information.info_dict["unique node locations per file"] = []
-    
     # Get sorted unique node locations for this file and append to the list
     unique_node_locations = sorted(unique_nodes.keys())
-    information.info_dict["unique node locations per file"].append(unique_node_locations)
+    bug_dict.get_info("unique node locations per file").append(unique_node_locations)
     
     # Format each unique node (showing all bug locations within it)
     for buggy_node_location in sorted(unique_nodes.keys()):
@@ -255,7 +271,7 @@ def format_bugs_grouped_by_node(buggy_file_info, information: InfoDict, start_nu
         buggy_node_location, buggy_node = buggy_node_info
         
         # Format the node info
-        buggy_node_text = r_utils.get_node_text(buggy_node, code)
+        buggy_node_text = utils.get_node_text(buggy_node, code)
         
         # Show the buggy node first
         result += f'{"="*60}\n'
@@ -282,11 +298,11 @@ def format_bugs_grouped_by_node(buggy_file_info, information: InfoDict, start_nu
     
     return result, bug_number
 
-def format_short_bug_info(information: InfoDict) -> str:
+def format_short_bug_info(bug_dict: BugDict) -> str:
     """
     Format only the bug locations for context retrieval instructions
     """
-    bug_locations = information.get_info("bug files and locations")
+    bug_locations = bug_dict.get_info("bug files and locations")
     result = ""
     bug_number = 1
     
@@ -299,9 +315,10 @@ def format_short_bug_info(information: InfoDict) -> str:
     
     return result
 
-def format_past_context(context_info: ContextDict, repair_summary: str = "", information: InfoDict = None) -> str:
+
+def format_past_context(context_dict: ContextDict, repair_summary: str = "", bug_dict: BugDict = None) -> str:
     """Format past context retrieval attempts (from previous patching attempts) as a string for LLM"""
-    retrieved = context_info.get_retrieved_context()
+    retrieved = context_dict.get_retrieved_context()
 
     result = "Below is a summary of past repair attempts and the failed tests:\n"
     if repair_summary:
@@ -315,19 +332,18 @@ def format_past_context(context_info: ContextDict, repair_summary: str = "", inf
         result += "\n"
     
     # Show bug locations
-    if information is not None:
+    if bug_dict is not None:
         result += "\nHere are all the bug locations and their corresponding start and end lines, which can also be found above:\n"
-        result += format_short_bug_info(information)
+        result += format_short_bug_info(bug_dict)
     
+    # TODO: consolidate this into prompt_templates.py
     # Show available functions per file with clear instructions
     result += "\nHere are the functions you can call and their arguments:\n"
     result += "\nThese functions are available to call in every round:\n"
     result += "- comment_retrieval(start_line, end_line): retrieve comments before the bug location\n"
-    result += "- all_variables_in_class(start_line, end_line): retrieve all variables in the class containing the bug location\n"
+    result += "- all_funcs_in_class(start_line, end_line): retrieve all method signatures in the class containing the bug location\n"
     result += "- one_hop_api_retrieval(start_line, end_line, var): retrieve 1-hop APIs callable on the specified variable. Requires both the bug location (start_line, end_line) and the variable name (var). This function should only be called on suspicious variables.\n"
-    result += "- get_callers(start_line, end_line): retrieve all callers of the function at the bug location\n"
-    result += "- get_callees(start_line, end_line): retrieve all callees within the bug location\n"
-    result += "- test_failure_check(): retrieve top k functions/APIs with most similar name to the failing test name/info?\n"
+    result += "- get_callers(start_line, end_line): retrieve all callers of the function enclosing the bug location\n"
     result += "\nThese functions are only available from the second round onwards:\n"
     result += "- similar_lines_of_code(start_line, end_line): retrieve top k similar lines of code to the bug location\n"
     result += "- similar_function_name(start_line, end_line): retrieve top k functions with most similar name to the function containing the bug location\n"
@@ -353,7 +369,7 @@ def format_past_context(context_info: ContextDict, repair_summary: str = "", inf
     result += "If you call the function, you MUST provide 'file_functions' with at least one function and the required arguments for each function.\n\n"
     
     result += "For each file, the remaining functions are available to call:\n"
-    available_functions_dict = context_info.get_available_functions()
+    available_functions_dict = context_dict.get_available_functions()
     
     if not available_functions_dict:
         result += "  No files available for context retrieval.\n"
@@ -365,12 +381,16 @@ def format_past_context(context_info: ContextDict, repair_summary: str = "", inf
     
     result += "\nIMPORTANT: Only use file paths and function names listed above. Do not make up file paths or function names.\n"
     result += "Additionally, only choose the functions that are necessary for fixing the bug. Do not call all functions just because they are available.\n"
+
+    result += "IMPORTANT: Make sure you format the function calls exactly as shown in the example above.\n"
+    result += "It should be a dictionary with exactly two keys: 'file_functions' and 'reasoning'.\n"
+    result += "The 'file_functions' key should be a dictionary with the file path as the key and the value should be a LIST of function calls, even if there is only one function call.\n"
     
     # TODO: Add instructions for extra params (e.g., specify which variables/methods to retrieve info on)
     return result
 
 
-def format_current_context(all_retrieval_results: list, reasoning: str, context_info: ContextDict, round_num: int = None) -> str:
+def format_current_context(all_retrieval_results: list, reasoning: str, context_dict: ContextDict, round_num: int = None) -> str:
     """Format current round's retrieval results (lightweight summary for LLM during retrieval rounds).
     
     Args:
@@ -386,7 +406,7 @@ def format_current_context(all_retrieval_results: list, reasoning: str, context_
             ]
             Round number = index + 1 (index 0 = round 1, index 1 = round 2, etc.)
         reasoning: The LLM's reasoning for the CURRENT round only
-        context_info: ContextDict to get available functions per file
+        context_dict: ContextDict to get available functions per file
         round_num: The actual round number (1-indexed). If None, calculates from list length.
     
     Returns:
@@ -419,7 +439,7 @@ def format_current_context(all_retrieval_results: list, reasoning: str, context_
     # Show remaining available functions per file
     result += "For each file, the remaining functions are available to call in the next round:\n"
     # Get the dict mapping file_path -> list of available functions
-    available_functions_dict = context_info.get_available_functions()  # Returns dict when file_path is None
+    available_functions_dict = context_dict.get_available_functions()  # Returns dict when file_path is None
     
     for file_path in sorted(available_functions_dict.keys()):
         available_for_file = available_functions_dict[file_path]
@@ -463,7 +483,7 @@ async def log_message(
 async def save_message_thread(
     context: UnboundedChatCompletionContext, 
     agent_id: str,
-    information: InfoDict
+    bug_dict: BugDict
 ):
     """
     Save the entire message thread from context to a .txt file.
@@ -471,21 +491,17 @@ async def save_message_thread(
     Args:
         context: The ChatCompletionContext to get messages from
         agent_id: The agent identifier (e.g., "basic", "cot", "admin_agent")
-        information: InfoDict to extract file name from (project name + bug id)
+        bug_dict: BugDict to extract file name from (project name + bug id)
     """
     messages = await context.get_messages()
     
-    # Get file name from InfoDict: project_name + bug_id
-    project_name = information.get_info("project name")
-    bug_id = information.get_info("bug id")
+    # Get file name from BugDict: project_name + bug_id
+    project_name = bug_dict.get_info("project name")
+    bug_id = bug_dict.get_info("bug id")
     file_name = f"{project_name}{bug_id}"
     
-    # Create autogen_chatcontext directory with project-specific subdirectory
-    base_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "autogen_chatcontext")
-    output_dir = os.path.join(base_dir, file_name)
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Create full file path with agent_id as suffix
+    output_dir = bug_dict.get_info("chat context path")
+
     file_path = os.path.join(output_dir, f"{file_name}_context_{agent_id}.txt")
     
     # Write messages to file
@@ -505,3 +521,33 @@ async def save_message_thread(
         f.write(f"{'='*80}\n")
     
     print(f"Message thread saved to: {file_path}")
+
+
+async def save_all_message_threads(
+    bug_dict: BugDict,
+    admin_agent_instance=None,
+    context_agent_instance=None,
+):
+    """Save chat logs for all agents that have been instantiated so far."""
+    from agents.agents import PatchingAgent
+
+    for agent_id, patcher_agent in PatchingAgent._instances_dict.items():
+        await save_message_thread(
+            patcher_agent.chat_messages,
+            agent_id=agent_id,
+            bug_dict=bug_dict,
+        )
+
+    if admin_agent_instance is not None:
+        await save_message_thread(
+            admin_agent_instance.chat_messages,
+            agent_id=admin_agent_instance.id.key,
+            bug_dict=bug_dict,
+        )
+
+    if context_agent_instance is not None:
+        await save_message_thread(
+            context_agent_instance.chat_messages,
+            agent_id="context_retrieval",
+            bug_dict=bug_dict,
+        )

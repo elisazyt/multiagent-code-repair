@@ -1,15 +1,24 @@
 import asyncio
 import os
+import sys
 from dotenv import load_dotenv
 from autogen_core import AgentId, SingleThreadedAgentRuntime
 from autogen_ext.models.openai import OpenAIChatCompletionClient
+
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+agents_dir = os.path.dirname(os.path.abspath(__file__))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+for path in (agents_dir, os.path.join(agents_dir, 'helpers'), os.path.join(agents_dir, 'data_structures')):
+    if path not in sys.path:
+        sys.path.insert(0, path)
+
 from agents import ContextRetrievalAgent
 from agent_helpers import save_message_thread
-from info_dict import InfoDict, ContextDict
+from dicts import BugDict, ContextDict
 from data_classes import ContextRetrievalTask
 
 # Load environment variables from .env file
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 env_path = os.path.join(project_root, '.env')
 load_dotenv(env_path)
 
@@ -23,37 +32,35 @@ async def main():
         api_key=os.environ.get("OPENAI_API_KEY")
     )
 
-    # Create InfoDict for closure8 bug
-    closure8_path = os.path.join(project_root, "ALL_TESTS", "closure8.java")
-    
-    # Get checkout directory from .env file (where Defects4J projects will be checked out)
-    checkout_directory = os.getenv('CHECKOUT_DIR')
-    if not checkout_directory:
-        raise ValueError("CHECKOUT_DIR not set in .env file. Please set it to the directory where Defects4J projects should be checked out.")
-    checkout_directory = os.path.abspath(checkout_directory)
-    
-    # Create checkout directory if it doesn't exist
-    os.makedirs(checkout_directory, exist_ok=True)
-    
-    # working_directory is where Defects4J checkouts will be stored
-    working_directory = checkout_directory
-    
-    information = InfoDict()
-    information.add_bug_info(
-        project_name="Closure",
-        bug_id="8",
-        bug_locations=[(closure8_path, [(202, 205)])],
-        working_directory=working_directory
+    # Create BugDict for closure8 bug
+    closure8_path = os.path.join(project_root, "tests", "ALL_TESTS", "closure8.java")
+
+    bug_dict = BugDict()
+    bug_dict.add_project_info("Closure", "8")
+    results_path = os.path.join(project_root, "tests", "test_results")
+    bm25_path = os.path.join(results_path, "external_tools", "bm25_indexes")
+    joern_executable = os.environ.get("JOERN_EXECUTABLE", "/opt/homebrew/bin/joern")
+    joern_working_dir = os.path.dirname(os.path.realpath(joern_executable))
+    bug_dict.add_paths(
+        results_path=results_path,
+        bm25_path=bm25_path,
+        joern_executable=joern_executable,
+        joern_working_dir=joern_working_dir,
+        joern_workspace_path=os.path.join(results_path, "external_tools", "joern_workspace"),
+        defects4j_checkout_path=os.path.join(results_path, "external_tools", "defects4j_checkouts"),
     )
-    
-    # Add Joern configuration
-    joern_executable = os.getenv('JOERN_EXECUTABLE')
-    joern_directory = os.getenv('JOERN_DIRECTORY')
-    if joern_executable and joern_directory:
-        information.add_joern_config(joern_executable, joern_directory)
-    
-    # Create ContextDict initialized from InfoDict
-    context_info = ContextDict(info_dict=information)
+    bug_dict.add_bug_locations([(closure8_path, [(202, 205)])])
+
+    context_dict = ContextDict(bug_dict=bug_dict)
+    bm25_run = bug_dict.get_info("bm25 path")
+    context_dict.add_bm25_rag_config(
+        k_signatures=5,
+        jsonl_dir=os.path.join(bm25_run, "jsonl"),
+        index_dir=os.path.join(bm25_run, "index"),
+        k_code_snippets=5,
+        window_size=20,
+        batch_size=8,
+    )
     
     # Role description for context retrieval agent
     context_role_description = """You are a context retrieval agent. Your job is to retrieve relevant context information 
@@ -67,10 +74,10 @@ async def main():
     def context_agent_factory():
         context_agent = ContextRetrievalAgent(
             model_client=model_client,
-            context_info=context_info,
+            context_dict=context_dict,
             role_description=context_role_description,
             past_summary="",
-            information=information
+            bug_dict=bug_dict
         )
         context_agent_instance_ref[0] = context_agent
         return context_agent
@@ -85,7 +92,7 @@ async def main():
 
     # Call context retrieval agent directly
     print("[context] Starting context retrieval...")
-    context_task = ContextRetrievalTask(retrieval_attempt=1, repair_summary="")
+    context_task = ContextRetrievalTask(retrieval_attempt=1)
     context_response = await runtime.send_message(context_task, recipient=context_agent_id)
     
     print(f"[context] Attempt 1 completed.")
@@ -95,9 +102,9 @@ async def main():
     if context_agent_instance_ref[0] is not None:
         context_agent = context_agent_instance_ref[0]
         await save_message_thread(
-            context_agent._context,
+            context_agent.chat_messages,
             agent_id="context_retrieval",
-            information=information
+            bug_dict=bug_dict
         )
 
     await model_client.close()

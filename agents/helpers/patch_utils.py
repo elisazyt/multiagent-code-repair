@@ -1,11 +1,5 @@
 import os
 import shutil
-import sys
-
-# Add the context_retrieval directory to the path
-sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'context_retrieval'))
-import isolate_bug as ib
-import retrieval_utils as utils
 
 def extract_markdown_blocks(agent_response) -> list[str]:
     '''
@@ -74,7 +68,13 @@ def replace_buggy_node(java_file_path, buggy_node_location, fixed_code) -> str:
     return result
 
 
-def apply_all_patches(bug_files_and_locations, agent_response, agent_role, unique_node_locations_per_file) -> dict[str, str]:
+def apply_all_patches(
+    bug_files_and_locations,
+    agent_response,
+    agent_role,
+    unique_node_locations_per_file,
+    temp_patches_dir: str,
+) -> dict[str, str]:
     """
     Apply all patches to multiple Java files.
     
@@ -84,6 +84,7 @@ def apply_all_patches(bug_files_and_locations, agent_response, agent_role, uniqu
         agent_role: The role of the agent (e.g., 'basic', 'api', 'context')
         unique_node_locations_per_file: List[List[Tuple[int, int]]] - pre-computed unique node locations per file
                                         Each inner list contains sorted (start_line, end_line) tuples for that file
+        temp_patches_dir: Directory for temporarily storing generated patches, before testing
     
     Returns:
         dict[str, str]: Mapping from modified_source_name to patch_file_path
@@ -92,10 +93,19 @@ def apply_all_patches(bug_files_and_locations, agent_response, agent_role, uniqu
     fixed_code_blocks = extract_markdown_blocks(agent_response)
 
     if not bug_files_and_locations or not fixed_code_blocks:
+        if bug_files_and_locations and not fixed_code_blocks:
+            print("[ERROR] Patch response contained no ```java code blocks.")
         return {}
     
     # Count unique nodes per file from the pre-computed locations
     unique_nodes_per_file = [len(locations) for locations in unique_node_locations_per_file]
+    expected_blocks = sum(unique_nodes_per_file)
+    if len(fixed_code_blocks) != expected_blocks:
+        print(
+            f"[ERROR] Expected {expected_blocks} ```java code blocks (one per unique buggy node) "
+            f"but found {len(fixed_code_blocks)}."
+        )
+        return {}
     
     # Split fixed_code_blocks based on unique nodes per file
     fixed_code_blocks_per_file = []
@@ -122,17 +132,17 @@ def apply_all_patches(bug_files_and_locations, agent_response, agent_role, uniqu
             continue
         
         if len(buggy_node_locations) != len(fixed_code_blocks_per_file[i]):
-            raise ValueError(f"Mismatch: {len(buggy_node_locations)} unique buggy nodes but {len(fixed_code_blocks_per_file[i])} code blocks for {java_file_path}. "
-                           f"Note: Multiple bug locations in the same method/class should result in only one patch for that entire node.")
+            print(
+                f"[ERROR] Mismatch for {java_file_path}: {len(buggy_node_locations)} unique buggy nodes "
+                f"but {len(fixed_code_blocks_per_file[i])} code blocks. "
+                f"Provide one ```java block per unique buggy node."
+            )
+            return {}
 
-        # Create a copy in the patches folder
-        patches_dir = os.path.join(os.path.dirname(os.path.dirname(java_file_path)), 'patches')
-        os.makedirs(patches_dir, exist_ok=True)
-        
         # Get the filename and create patched version
         original_filename = os.path.basename(java_file_path)
         patched_filename = original_filename.replace('.java', f'_patched_{agent_role}.java')
-        patched_file_path = os.path.join(patches_dir, patched_filename)
+        patched_file_path = os.path.join(temp_patches_dir, patched_filename)
         
         # Copy the original file to the patches folder
         shutil.copy2(java_file_path, patched_file_path)

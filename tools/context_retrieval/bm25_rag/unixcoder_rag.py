@@ -3,18 +3,18 @@ import os
 from typing import List, Tuple
 from dotenv import load_dotenv
 
-# Add parent directory to path so we can import unixcoder
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if parent_dir not in sys.path:
-    sys.path.append(parent_dir)
+# Add project root to path
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+if project_root not in sys.path:
+    sys.path.append(project_root)
 
 # Load environment variables
 load_dotenv()
 
 import torch
-from unixcoder import UniXcoder
+from .unixcoder import UniXcoder
 
-import context_retrieval.retrieval_utils as utils
+from ..parsing_retrieval_funcs import tree_sitter_utils as utils
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = UniXcoder("microsoft/unixcoder-base")

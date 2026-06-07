@@ -5,12 +5,11 @@ Generate a patch for the buggy Java code.
 Do not assume any methods exist unless they are explicitly called or defined.
 If the patch calls a new method, it should be explicitly defined and fully implemented,
 without any placeholder logic.
-IMPORTANT:You should NOT call any methods that are not confirmed to exist.
 
 All buggy locations should be fixed. Refactoring and commenting should not be considered fixes.
 
 The user cannot modify your code, so do not suggest incomplete code which requires others to modify.
-Suggest the full code instead of partial code or code changes.
+Suggest the full code instead of partial code.
 
 RETURN FORMAT:
 For every single bug location, return the patch for the entire buggy node in markdown format, enclosed in the following syntax:
@@ -19,9 +18,13 @@ For every single bug location, return the patch for the entire buggy node in mar
 ```
 Additionally, briefly explain your reasoning for the patch.
 
-Do not use markdown format for anything that is not a patch. Only use markdown format for the patches.
-The number of markdown blocks should equal the number of bug locations.
-The patch should contain the full code for the bug location.
+Important things to note:
+- Do not use markdown format for anything that is not a patch. Only use markdown format for the patches.
+- The patch should contain the full code for the bug location.
+- You should fix every bug location, so the number of markdown blocks should equal the number of bug locations.
+- Do not change any code outside of the bug locations.
+- You should not call any methods that are not confirmed to exist.
+- Make sure the patch is valid Java code that can be compiled and run.
 """
 
 
@@ -44,7 +47,7 @@ if new APIs are needed.
 Whenever possible, use the retrieved APIs instead of creating your own functions."""
 
 
-CONTEXT_PROMPT = "" # TODO: add context prompt
+CONTEXT_PROMPT = "Generate a patch for the bug using the context information provided."
 
 # TODO: update as needed, figure out how to provide this info to agent using methods other than natural language?
 PATTERN_PROMPT = """
