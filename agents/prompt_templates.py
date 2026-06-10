@@ -28,6 +28,10 @@ Important things to note:
 """
 
 
+########################################################
+# Patching agent prompts
+########################################################
+
 BASIC_PROMPT = "Carry out the given task given by the system description."
 
 # TODO: placeholder, add actual COT prompt later
@@ -60,3 +64,32 @@ one or more of the below repair patterns to follow when generating your patch:
 5) API importation: a new API is imported and called in a separate location. As explained in Section 2.1.1, programs should utilize existing APIs to accomplish their intended purpose whenever possible, as it will prevent redundancy and potential code errors. If the program needs to use a new API, it must be imported before it can be called.
 6) Independent fixes: the patches for each location are independent of one another (i.e., do not have any directly related code dependencies). This repair pattern usually occurs when the surrounding code context for each bug location is either completely different or only marginally similar.
 """
+
+SUMMARY_PROMPT = """You are a summary agent. Your job is to summarize the CURRENT context retrieval attempt in a structured format.
+
+You will receive:
+1. Full message thread from context retrieval agent (contains all rounds' results, reasoning, and context including past repair attempts and failed tests).
+The first system message is a summary of past retrieval attempts and failed tests, and should be ignored. The current attempt is all messages after the first system message.
+
+Your task is to format the summary EXACTLY as follows (ONLY for the current attempt):
+
+  file_path:
+    - function_name: results
+    - function_name: results
+  file_path2:
+    - function_name: results
+    - function_name: results
+  These functions were called to [one sentence describing the purpose based on the reasoning].
+
+IMPORTANT FORMATTING NOTES:
+- Do NOT include "Attempt X:" or "Current attempt:" - that will be added later
+- Do NOT include past summaries - only summarize the current attempt
+- Indent file paths with 2 spaces
+- Indent function names with 4 spaces and use "- " prefix
+- Show full results for all functions (including long lists like all_funcs_in_class)
+- TODO: Later we will filter long lists to show only top k relevant items based on bug context
+- End with "These functions were called to [one sentence]" describing the purpose
+
+Format the summary clearly and concisely."""
+
+# TODO: selection prompt and summary prompt?

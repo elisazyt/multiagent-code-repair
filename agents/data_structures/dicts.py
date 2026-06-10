@@ -77,7 +77,7 @@ class BugDict:
         defects4j_checkout_path: str,
     ):
         """
-        results_path: path to folder containing chat_context, candidate_patches, final_patch
+        results_path: path to folder containing chat_context, candidate_patches, final_patch, generated_patches
         bm25_path: path to folder containing bm25 index and corresponding jsonl file
         joern_executable: path to Joern executable (e.g., /opt/homebrew/bin/joern)
         joern_working_dir: path to folder where Joern is installed and runs from
@@ -93,7 +93,7 @@ class BugDict:
         results_path = os.path.abspath(results_path)
         self.add_info("results path", results_path)
         # results_path points to a folder which contains the following inner folders
-        for subdir in ("chat_context", "candidate_patches", "final_patch", "temp_patch"):
+        for subdir in ("chat_context", "candidate_patches", "final_patch", "generated_patches"):
             os.makedirs(os.path.join(results_path, subdir), exist_ok=True)
 
         chat_context_path = os.path.join(results_path, "chat_context", label)
@@ -104,9 +104,8 @@ class BugDict:
         os.makedirs(candidate_patches_path, exist_ok=True)
         self.add_info("candidate patches path", candidate_patches_path)
 
-        # temporary patch directory is where all generated patches are stored, they are copied
-        # into the checkout directory and added to candidate_patches if tests pass
-        self.add_info("temporary patch path", os.path.join(results_path, "temp_patch", label))
+        # generated patches directory stores every agent's patch attempt
+        self.add_info("generated patches path", os.path.join(results_path, "generated_patches", label))
         self.add_info("final patch path", os.path.join(results_path, "final_patch"))
 
         bm25_project_path = os.path.join(os.path.abspath(bm25_path), label)

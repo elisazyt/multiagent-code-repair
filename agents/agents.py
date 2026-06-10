@@ -1,8 +1,6 @@
 import os
 import shutil
 import sys
-from typing import Optional
-from openai import AsyncOpenAI
 from autogen_core import AgentId, MessageContext, RoutedAgent, message_handler
 from autogen_core.models import ChatCompletionClient, SystemMessage, UserMessage, AssistantMessage
 from autogen_core.model_context import UnboundedChatCompletionContext
@@ -18,6 +16,8 @@ from agents.data_structures.data_classes import (
     TestingResponse,
     ContextRetrievalTask,
     ContextRetrievalResponse,
+    SelectionTask,
+    SelectionResponse,
     SummaryTask,
     SummaryResponse,
 )
@@ -29,6 +29,7 @@ from agents.helpers import cr_functions as cr_funcs
 
 from tools.test_suites import test_suites as ts
 
+# TODO: maybe add something to track start and end time and calculate total time taken?
 
 class AdminAgent(RoutedAgent):
     def __init__(self, receiver_instances: dict[str, list[AgentId]], system_message: SystemMessage, context_dict: ContextDict = None, runtime = None):
@@ -95,7 +96,7 @@ class AdminAgent(RoutedAgent):
         sender_key = ctx.sender.key if ctx.sender else "main"
         await helpers.log_message(
             self.chat_messages,
-            f"TestingTask (patcher_id={message.patcher_id}): Test the patch with mapping {message.mapping}",
+            f"TestingTask (patcher_id={message.patcher_id}): Run test suites on the patched files",
             role="user",
             source=sender_key
         )
@@ -230,37 +231,40 @@ class AdminAgent(RoutedAgent):
 
 class PatchingAgent(RoutedAgent):
     # Class variable to store instances by their key (shared across all instances)
-    _instances_dict = {}
+    instances_dict = {}
+    # Class variable to store all candidate patch info (i.e., the dict returned by save_candidate_patch)
+    #  across all runs, for all patching agent instances
+    candidate_patches = []
     
-    def __init__(self, model_client: ChatCompletionClient, bug_dict: BugDict, role_description: dict[str, str]):
+    def __init__(self, model_client: ChatCompletionClient, bug_dict: BugDict, role_descriptions: dict[str, str]):
         super().__init__("Patching Agent")
         # create OpenAI chat completion client
-        self._model_client = model_client
+        self.model_client = model_client
 
         self.bug_dict = bug_dict
         
-        # role_description can be a string or a dict mapping agent keys to role description strings
+        # role_descriptions can be a string or a dict mapping agent keys to role description strings
         # If it's a dict, look up the role description based on self.id.key (set by super().__init__)
         agent_key = self.id.key
-        if agent_key in role_description:
-            self._role_description = role_description[agent_key]
+        if agent_key in role_descriptions:
+            self.role_description = role_descriptions[agent_key]
         else:
             raise ValueError(f"Agent key '{agent_key}' not found in role_descriptions dict. Available keys: {list(role_description.keys())}")
         
         # Create system message with the role description
         # For context patching agent, context_summary will be added as a UserMessage in on_task
-        self._system_message = helpers.get_system_message(bug_dict, self._role_description)
+        self.system_message = helpers.get_system_message(bug_dict, self.role_description)
         
         # Each agent instance has its own LLM chat history (manages messages automatically)
-        self.chat_messages = UnboundedChatCompletionContext(initial_messages=[self._system_message])
+        self.chat_messages = UnboundedChatCompletionContext(initial_messages=[self.system_message])
 
     @message_handler
     # When runtime.send_message is called with an argument of type Task, this on_task method is called
     # The response of send_message is a TaskResponse object
     async def on_task(self, message: PatchingTask, ctx: MessageContext) -> PatchingResponse:
         # Store this instance in the class dictionary (shared across all instances)
-        if self.id.key not in PatchingAgent._instances_dict:
-            PatchingAgent._instances_dict[self.id.key] = self
+        if self.id.key not in PatchingAgent.instances_dict:
+            PatchingAgent.instances_dict[self.id.key] = self
         
         # If context_summary is provided, recreate the system message with context summary included
         # This is for context patching agent
@@ -269,16 +273,16 @@ class PatchingAgent(RoutedAgent):
             existing_messages = await self.chat_messages.get_messages()
             
             # Recreate system message with context summary
-            self._system_message = helpers.get_system_message(
+            self.system_message = helpers.get_system_message(
                 self.bug_dict, 
-                self._role_description, 
+                self.role_description, 
                 context_summary=message.context_summary
             )
             
             # Recreate context with new system message, preserving all non-system messages
             # Filter out the old system message and keep everything else
             other_messages = [msg for msg in existing_messages if not isinstance(msg, SystemMessage)]
-            self.chat_messages = UnboundedChatCompletionContext(initial_messages=[self._system_message] + other_messages)
+            self.chat_messages = UnboundedChatCompletionContext(initial_messages=[self.system_message] + other_messages)
         
         # Create UserMessage for this request
         # Use the actual sender's key (e.g., "admin_agent") instead of receiver's key
@@ -294,18 +298,18 @@ class PatchingAgent(RoutedAgent):
         messages = await self.chat_messages.get_messages()
         
         # Call LLM with full conversation history
-        llm_result = await self._model_client.create(
+        llm_result = await self.model_client.create(
             messages=messages,
             cancellation_token=ctx.cancellation_token,
         )
         
         result_text = llm_result.content
-        # Save patches and get mapping of modified_source_name -> patch_file_path
+        # Save patches and get mapping of modified_source_name -> (patch_file_path, patched_nodes)
         print(f"--------------------------------")
         print(f"result_text: {result_text}")
         print(f"--------------------------------")
-        patch_mapping = self.save_patch(result_text)
-        
+        patch_mapping = self.save_patch(result_text, patching_attempt=message.patching_attempt)
+
         # Add assistant response to context (for next round)
         assistant_message = AssistantMessage(content=result_text, source=self.id.key)
         await self.chat_messages.add_message(assistant_message)
@@ -331,40 +335,80 @@ class PatchingAgent(RoutedAgent):
             source=source
         )
 
-    def save_patch(self, response: str) -> dict[str, str]:
+    def save_patch(self, response: str, patching_attempt: int) -> dict[str, tuple[str, list[str]]]:
         """
-        Save patches to a temporary directory and return mapping of modified_source_name -> patch_file_path.
+        Save patches to the directory for generated patches and return mapping of
+        modified_source_name -> (patch_file_path, patched_nodes).
         
         Args:
             response: The agent's response containing markdown code blocks
-            
+            patching_attempt: Patch attempt number (1, 2, 3, ...) appended to each filename
+
         Returns:
-            dict[str, str]: Mapping from modified_source_name to patch_file_path
+            dict mapping modified_source_name -> (patch_file_path, patched_nodes)
         """
         bug_files_and_locations = self.bug_dict.get_info("bug files and locations")
         unique_node_locations_per_file = self.bug_dict.get_info("unique node locations per file")
-        # create a temporary directory specific to the current bug + agent
-        temp_dir = os.path.join(
-            self.bug_dict.get_info("temporary patch path"),
+        generated_patches_dir = os.path.join(
+            self.bug_dict.get_info("generated patches path"),
             self.id.key,
         )
-        if os.path.isdir(temp_dir):
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        os.makedirs(temp_dir, exist_ok=True)
+        os.makedirs(generated_patches_dir, exist_ok=True)
         try:
             patch_mapping = patch_utils.apply_all_patches(
                 bug_files_and_locations,
                 response,
-                self.id.key,
                 unique_node_locations_per_file,
-                temp_patches_dir=temp_dir,
+                generated_patches_dir=generated_patches_dir,
+                patching_attempt=patching_attempt,
             )
         except Exception as e:
             print(f"[ERROR] Failed to apply patches for {self.id.key}: {e}")
             patch_mapping = {}
-        if not patch_mapping:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+
         return patch_mapping
+    
+    def save_candidate_patch(self, patch_mapping: dict[str, tuple[str, list[str]]]):
+        """
+        Given a patch mapping of a patch that has passed all test suites, save the full patched files
+        under candidate_patches/{bug project and id}/{patcher id}/
+        Stores full patch info in the PatchingAgent.candidate_patches list.
+        Full patch info includes: type of patching agent, modified source name, corresponding short filename,
+        path to entire patched file, and list of patched nodes per file
+        """
+        def get_short_filename(modified_source_name: str) -> str:
+            """
+            Given the full modified source name, return the short filename (without the package name)
+            e.g., "com.google.javascript.jscomp.TypeCheck" -> "TypeCheck.java"
+            """
+            return modified_source_name.rsplit(".", 1)[-1] + ".java"
+        # 1) Save full patched files in agent-specific directory
+        # create the directory for the specific patching agent
+        candidate_dir = os.path.join(
+            self.bug_dict.get_info("candidate patches path"),
+            self.id.key,
+        )
+        os.makedirs(candidate_dir, exist_ok=True)
+        # save files
+        for modified_source_name, (patch_file_path, patched_nodes) in patch_mapping.items():
+            filename = get_short_filename(modified_source_name)
+            shutil.copy2(patch_file_path, os.path.join(candidate_dir, filename))
+        
+        # 2) Store full patch info as a dict
+        patch_info = {}
+        # store which agent generated the patch
+        patch_info["patcher id"] = self.id.key
+        patch_info["files"] = {}
+        # populate patch_info["files"] with full patch info for each file (i.e., modified source name)
+        for modified_source_name, (patch_file_path, patched_nodes) in patch_mapping.items():
+            patch_info["files"][modified_source_name] = {
+                "filename": get_short_filename(modified_source_name),
+                "patch file path": patch_file_path,
+                "patched nodes": patched_nodes,
+            }
+        self.candidate_patches.append(patch_info)
+
+
 
 
 # TODO: for the purposes of keeping the prompt short, remove the failing test function.
@@ -375,8 +419,11 @@ class TestingAgent(RoutedAgent):
         self.bug_dict = bug_dict
     
     @message_handler
-    async def on_task(self, message: TestingTask, ctx: MessageContext) -> TestingResponse:        
-        mapping = message.mapping
+    async def on_task(self, message: TestingTask, ctx: MessageContext) -> TestingResponse:   
+        # full_mapping is the mapping of modified_source_name -> (patch_file_path, patched_nodes)
+        full_mapping = message.mapping
+        # extract the mapping of modified_source_name -> patch_file_path
+        file_mapping = {modified_source_name: patch_file_path for modified_source_name, (patch_file_path, _) in full_mapping.items()}
 
         project_name = self.bug_dict.get_info("project name")
         bug_id = self.bug_dict.get_info("bug id")
@@ -388,7 +435,7 @@ class TestingAgent(RoutedAgent):
         )
         reference_dir = self.bug_dict.get_info("defects4j reference checkout path")
         test_result = ts.run_defects4j_test(
-            project_name, bug_id, agent_checkout_dir, mapping, reference_dir
+            project_name, bug_id, agent_checkout_dir, file_mapping, reference_dir
         )
 
         failing_test_info_string = ""
@@ -409,34 +456,10 @@ class TestingAgent(RoutedAgent):
                 failing_test_info_string += test_info_string
                 failing_test_info_string += '\n'
 
-        # remove the temporary directory after testing is finished
-        temp_dir = os.path.join(
-            self.bug_dict.get_info("temporary patch path"),
-            message.patcher_id,
-        )
-        if os.path.isdir(temp_dir):
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
         if all_tests_passed:
             return TestingResponse(patcher_id=message.patcher_id, success=True, str_result="All test suites passed.", list_result=[])
         else:
             return TestingResponse(patcher_id=message.patcher_id, success=False, str_result=failing_test_info_string, list_result=test_info_list)
-
-
-def is_valid_format(file_functions) -> bool:
-    """True if file_functions matches {file_path: [{func_name: {args}}, ...]}."""
-    if not isinstance(file_functions, dict) or not file_functions:
-        return False
-    for func_calls in file_functions.values():
-        if not isinstance(func_calls, list) or not func_calls:
-            return False
-        for entry in func_calls:
-            if not isinstance(entry, dict) or len(entry) != 1:
-                return False
-            _, args = next(iter(entry.items()))
-            if not isinstance(args, dict):
-                return False
-    return True
 
 
 class ContextRetrievalAgent(RoutedAgent):
@@ -444,7 +467,7 @@ class ContextRetrievalAgent(RoutedAgent):
         super().__init__("Context Retrieval Agent")
         self.context_dict = context_dict
         self.bug_dict = bug_dict
-        self._model_client = model_client
+        self.model_client = model_client
 
         # Initialize CPG if Joern configuration is available
         self.initialize_cpg()
@@ -519,7 +542,7 @@ class ContextRetrievalAgent(RoutedAgent):
 
             # Call LLM for this round
             messages = await self.chat_messages.get_messages()
-            llm_result = await self._model_client.create(
+            llm_result = await self.model_client.create(
                 messages=messages,
                 tools=tools,
                 cancellation_token=ctx.cancellation_token,
@@ -562,7 +585,7 @@ class ContextRetrievalAgent(RoutedAgent):
             # TODO: figure out selected_methods and 2-hop expansion
             selected_methods = args.get("selected_methods", [])  # For 2-hop API expansion
 
-            if not is_valid_format(file_functions):
+            if not helpers.is_valid_format(file_functions):
                 await self.chat_messages.add_message(UserMessage(
                     content=(
                         f"Error in Round {round}: Function requests were returned in the wrong format. "
@@ -718,41 +741,27 @@ class ContextRetrievalAgent(RoutedAgent):
         else:
             return f"Unknown function: {function_name} for {file_path}"
 
+# TODO: implement this agent
+class SelectionAgent(RoutedAgent):
+    def __init__(self, model_client: ChatCompletionClient):
+        super().__init__("Selection Agent")
+        self._model_client = model_client
+    
+    @message_handler
+    async def on_task(self, message: SelectionTask, ctx: MessageContext) -> SelectionResponse:
+        """Select the best candidate patch from the candidate patches directory."""
+        pass
+
 
 class SummaryAgent(RoutedAgent):
     """Agent that summarizes context retrieval results."""
     
     def __init__(self, model_client: ChatCompletionClient):
         super().__init__("Summary Agent")
-        self._model_client = model_client
+        self.model_client = model_client
         
         # System message for SummaryAgent
-        system_message = SystemMessage(content="""You are a summary agent. Your job is to summarize the CURRENT context retrieval attempt in a structured format.
-
-You will receive:
-1. Full message thread from context retrieval agent (contains all rounds' results, reasoning, and context including past repair attempts and failed tests).
-The first system message is a summary of past retrieval attempts and failed tests, and should be ignored. The current attempt is all messages after the first system message.
-
-Your task is to format the summary EXACTLY as follows (ONLY for the current attempt):
-
-  file_path:
-    - function_name: results
-    - function_name: results
-  file_path2:
-    - function_name: results
-    - function_name: results
-  These functions were called to [one sentence describing the purpose based on the reasoning].
-
-IMPORTANT FORMATTING NOTES:
-- Do NOT include "Attempt X:" or "Current attempt:" - that will be added later
-- Do NOT include past summaries - only summarize the current attempt
-- Indent file paths with 2 spaces
-- Indent function names with 4 spaces and use "- " prefix
-- Show full results for all functions (including long lists like all_funcs_in_class)
-- TODO: Later we will filter long lists to show only top k relevant items based on bug context
-- End with "These functions were called to [one sentence]" describing the purpose
-
-Format the summary clearly and concisely.""")
+        system_message = SystemMessage(content=)
         
         self.chat_messages = UnboundedChatCompletionContext(initial_messages=[system_message])
     
@@ -795,7 +804,7 @@ IMPORTANT FORMATTING NOTES:
         messages = await self.chat_messages.get_messages()
         
         # Call LLM
-        llm_result = await self._model_client.create(
+        llm_result = await self.model_client.create(
             messages=messages,
             cancellation_token=ctx.cancellation_token,
         )

@@ -25,7 +25,7 @@ from agents.prompt_templates import BASIC_PROMPT, COT_PROMPT, PATTERN_PROMPT, CO
 # TODO: change these for actually running, these are just the test paths
 ########################################################
 
-# path to folder containing chat_context, candidate_patches, final_patch
+# path to folder containing chat_context, candidate_patches, final_patch, generated_patches
 RESULTS_PATH = os.path.join(project_root, "tests", "test_results")
 
 # path to folder containing bm25 index and corresponding jsonl file
@@ -169,9 +169,7 @@ async def main():
         print(f"Cot agent completed in {cot_rounds} rounds")
         print(f"Context agent completed in {context_rounds} rounds")
         print(f"Pattern agent completed in {pattern_rounds} rounds")
-        print(f"Chat logs: {bug_dict.get_info('chat context path')}")
-        print(f"Candidate patches: {bug_dict.get_info('candidate patches path')}")
-        print(f"Final patch: {bug_dict.get_info('final patch path')}")
+        print(f"Final patch location: {bug_dict.get_info('final patch path')}")
     finally:
         # Regardless of whether the program ran all the way to completion, store the latest
         # message threads for each agent
@@ -182,9 +180,6 @@ async def main():
         )
         await model_client.close()
         await runtime.stop_when_idle()
-
-    # TODO: remove the temporary patch directories
-
 
 if __name__ == "__main__":
     asyncio.run(main())

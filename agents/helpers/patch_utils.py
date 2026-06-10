@@ -71,24 +71,25 @@ def replace_buggy_node(java_file_path, buggy_node_location, fixed_code) -> str:
 def apply_all_patches(
     bug_files_and_locations,
     agent_response,
-    agent_role,
     unique_node_locations_per_file,
-    temp_patches_dir: str,
-) -> dict[str, str]:
+    generated_patches_dir: str,
+    patching_attempt: int,
+) -> dict[str, tuple[str, list[str]]]:
     """
     Apply all patches to multiple Java files.
     
     Args:
         bug_files_and_locations: List of tuples (java_file_path, modified_source_name, List of bug locations)
         agent_response: The agent's response containing markdown code blocks
-        agent_role: The role of the agent (e.g., 'basic', 'api', 'context')
         unique_node_locations_per_file: List[List[Tuple[int, int]]] - pre-computed unique node locations per file
                                         Each inner list contains sorted (start_line, end_line) tuples for that file
-        temp_patches_dir: Directory for temporarily storing generated patches, before testing
+        generated_patches_dir: Directory for storing generated patches
+        patching_attempt: Round number appended to filename
     
     Returns:
-        dict[str, str]: Mapping from modified_source_name to patch_file_path
-                       e.g., {'org.jfree.chart.plot.PiePlot': '/path/to/PiePlot_patched_basic.java'}
+        dict[str, tuple[str, list[str]]]: Mapping from modified_source_name to a tuple containing:
+        - path to patch file
+        - list of patched nodes
     """
     fixed_code_blocks = extract_markdown_blocks(agent_response)
 
@@ -115,7 +116,6 @@ def apply_all_patches(
         fixed_code_blocks_per_file.append(fixed_code_blocks[start_idx:end_idx])
         start_idx = end_idx
     
-    # Track mapping of modified_source_name -> patch_file_path
     patch_mapping = {}
     
     # Process each file
@@ -139,16 +139,15 @@ def apply_all_patches(
             )
             return {}
 
-        # Get the filename and create patched version
-        original_filename = os.path.basename(java_file_path)
-        patched_filename = original_filename.replace('.java', f'_patched_{agent_role}.java')
-        patched_file_path = os.path.join(temp_patches_dir, patched_filename)
+        class_name = modified_source_name.rsplit(".", 1)[-1]
+        patched_filename = f"{class_name}{patching_attempt}.java"
+        patched_file_path = os.path.join(generated_patches_dir, patched_filename)
         
         # Copy the original file to the patches folder
         shutil.copy2(java_file_path, patched_file_path)
         
         num_patches = len(buggy_node_locations)
-        
+
         # Apply patches in reverse order (from highest line numbers to lowest)
         for j in range(num_patches - 1, -1, -1):
             # Get patched content
@@ -159,10 +158,13 @@ def apply_all_patches(
             # Write it back to the file
             with open(patched_file_path, 'w', encoding='utf-8') as f:
                 f.write(patched_content)
-        
-        # Store the mapping: modified_source_name -> patch_file_path
-        patch_mapping[modified_source_name] = patched_file_path
-    
+            
+        # Store all patched nodes in the source file in sequential order
+        patched_nodes = list(fixed_code_blocks_per_file[i])
+
+        # Store both mappings
+        patch_mapping[modified_source_name] = (patched_file_path, patched_nodes)
+
     return patch_mapping
 
 

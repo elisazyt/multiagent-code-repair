@@ -18,15 +18,15 @@ class PatchingResponse:
     patcher_id: str
     # result is the agent response
     result: str
-    # mapping is the mapping of (modified_source_name, patch_file_path) to send to the testing agent
-    mapping: dict[str, str]
+    # mapping is the mapping of modified_source_name -> (patch_file_path, patched_nodes)
+    mapping: dict[str, tuple[str, list[str]]]
 
 @dataclass
 class TestingTask:
     # patcher_id is the id of the PatchingAgent whose patch is being tested (i.e., "basic", "cot")
     patcher_id: str
-    # mapping is the mapping of (modified_source_name, patch_file_path)
-    mapping: dict[str, str]
+    # mapping is the mapping of modified_source_name -> (patch_file_path, patched_nodes)
+    mapping: dict[str, tuple[str, list[str]]]
 
 @dataclass
 class TestingResponse:
@@ -38,9 +38,6 @@ class TestingResponse:
     str_result: str
     # testing result message formatted as a list of dicts, used for bm25/rag
     list_result: list[dict[str, str]]
-
-
-#TODO: inegrate these with the OpenAI function calling schema
 
 @dataclass
 class ContextRetrievalTask:
@@ -58,6 +55,17 @@ class ContextRetrievalResponse:
     function_results: str
     # TODO: consider if we need to provide the message_thread to summary agent.
     # This may be useful if we want summary agent to filter out the top k functions/variables based on past context
+
+@dataclass
+class SelectionTask:
+    """Task for SelectionAgent to select the best candidate patch from the candidate patches directory."""
+    # List of candidate patches
+    candidate_patches: list
+
+@dataclass
+class SelectionResponse:
+    """Response from SelectionAgent with the best candidate patch."""
+    selected_patch: str
 
 @dataclass
 class SummaryTask:

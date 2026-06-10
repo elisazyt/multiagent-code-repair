@@ -1,4 +1,8 @@
-import asyncio
+"""
+Helper functions for multi-agent workflows, formatting, logging, and other
+functionalities that are not specific to any one agent instance.
+"""
+
 import sys
 import os
 from typing import Tuple
@@ -41,7 +45,7 @@ async def run_patch_test_loop(patcher_id: str, message: str, admin_agent: AgentI
         print(f"[{patcher_id}] Round {round} - Patching result: {patching_response.result}")
 
         from agents.agents import PatchingAgent
-        patcher_agent = PatchingAgent._instances_dict.get(patcher_id)
+        patcher_agent = PatchingAgent.instances_dict.get(patcher_id)
 
         # If there is no mapping, the patch wasn't applied correctly
         if not patching_response.mapping:
@@ -70,7 +74,7 @@ async def run_patch_test_loop(patcher_id: str, message: str, admin_agent: AgentI
 
             if testing_response.success:
                 print(f"[{patcher_id}] Test passed: {testing_response.str_result}")
-                # TODO: save the patch as a candidate
+                patcher_agent.save_candidate_patch(patching_response.mapping)
                 break
             # Only the context retrieval agent passes in context_dict as an arg because it needs access to the
             # failing test info to construct the prompt for the next patching attempt, all other patching agents
@@ -152,6 +156,24 @@ async def run_single_attempt_context(attempt_num: int, admin_agent: AgentId, run
     
     return final_summary
 
+
+########################################################
+# Helper function for validating function call format for context retrieval
+########################################################
+def is_valid_format(file_functions) -> bool:
+    """True if file_functions matches {file_path: [{func_name: {args}}, ...]}."""
+    if not isinstance(file_functions, dict) or not file_functions:
+        return False
+    for func_calls in file_functions.values():
+        if not isinstance(func_calls, list) or not func_calls:
+            return False
+        for entry in func_calls:
+            if not isinstance(entry, dict) or len(entry) != 1:
+                return False
+            _, args = next(iter(entry.items()))
+            if not isinstance(args, dict):
+                return False
+    return True
 
 ########################################################
 # Helper functions for getting and formatting information
@@ -531,7 +553,7 @@ async def save_all_message_threads(
     """Save chat logs for all agents that have been instantiated so far."""
     from agents.agents import PatchingAgent
 
-    for agent_id, patcher_agent in PatchingAgent._instances_dict.items():
+    for agent_id, patcher_agent in PatchingAgent.instances_dict.items():
         await save_message_thread(
             patcher_agent.chat_messages,
             agent_id=agent_id,
