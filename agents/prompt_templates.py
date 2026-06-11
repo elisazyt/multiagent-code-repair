@@ -92,4 +92,5 @@ IMPORTANT FORMATTING NOTES:
 
 Format the summary clearly and concisely."""
 
-# TODO: selection prompt and summary prompt?
+SELECTION_PROMPT = """
+All of these candidate patches pass all the test suites. Given the bug information in the system prompt, choose the one that best fixes the bug. Remember: respond with the best agent alone on the first line, followed by a brief explanation."""

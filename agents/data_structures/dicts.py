@@ -95,6 +95,10 @@ class BugDict:
         # results_path points to a folder which contains the following inner folders
         for subdir in ("chat_context", "candidate_patches", "final_patch", "generated_patches"):
             os.makedirs(os.path.join(results_path, subdir), exist_ok=True)
+        # generated patches directory stores every agent's patch attempt
+        self.add_info("generated patches path", os.path.join(results_path, "generated_patches", label))
+        # don't add label for final patch directory because we store single files with labels, not folders
+        self.add_info("final patch path", os.path.join(results_path, "final_patch"))
 
         chat_context_path = os.path.join(results_path, "chat_context", label)
         os.makedirs(chat_context_path, exist_ok=True)
@@ -103,10 +107,6 @@ class BugDict:
         candidate_patches_path = os.path.join(results_path, "candidate_patches", label)
         os.makedirs(candidate_patches_path, exist_ok=True)
         self.add_info("candidate patches path", candidate_patches_path)
-
-        # generated patches directory stores every agent's patch attempt
-        self.add_info("generated patches path", os.path.join(results_path, "generated_patches", label))
-        self.add_info("final patch path", os.path.join(results_path, "final_patch"))
 
         bm25_project_path = os.path.join(os.path.abspath(bm25_path), label)
         os.makedirs(bm25_project_path, exist_ok=True)

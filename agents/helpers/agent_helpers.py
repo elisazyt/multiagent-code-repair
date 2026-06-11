@@ -21,6 +21,7 @@ from agents.data_structures.data_classes import (
     SummaryTask,
 )
 from agents.data_structures.dicts import BugDict, ContextDict
+from agents.prompt_templates import SUMMARY_PROMPT
 from tools.context_retrieval.parsing_retrieval_funcs import tree_sitter_utils as utils
 
 
@@ -128,6 +129,7 @@ async def run_single_attempt_context(attempt_num: int, admin_agent: AgentId, run
     summary_task = SummaryTask(
         function_results=context_response.function_results,  # String with reasoning and results
         retrieval_attempt=attempt_num,
+        message=SUMMARY_PROMPT,
     )
     summary_response = await runtime.send_message(summary_task, recipient=admin_agent)
     print(f"[context] Attempt {attempt_num} - Summary completed")

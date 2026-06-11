@@ -61,6 +61,8 @@ class SelectionTask:
     """Task for SelectionAgent to select the best candidate patch from the candidate patches directory."""
     # List of candidate patches
     candidate_patches: list
+    # message is the prompt
+    message: str
 
 @dataclass
 class SelectionResponse:
@@ -75,6 +77,8 @@ class SummaryTask:
     function_results: str  # String with reasoning and results for all rounds
     # Attempt number (e.g., 1, 2, 3) - each attempt consists of up to 3 rounds
     retrieval_attempt: int  # Actually represents attempt number, not round number
+    # message is the prompt
+    message: str
 
 @dataclass
 class SummaryResponse:

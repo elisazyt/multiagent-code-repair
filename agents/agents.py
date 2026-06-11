@@ -38,8 +38,9 @@ class AdminAgent(RoutedAgent):
         self.testing_instances = receiver_instances.get("testing", [])
         self.context_instances = receiver_instances.get("context", [])
         self.summary_instances = receiver_instances.get("summary", [])
+        self.selection_instances = receiver_instances.get("selection", [])
         self.context_dict = context_dict
-        self._runtime = runtime  # Store as private attribute since runtime is a read-only property
+        self.runtime = runtime
         
         # LLM chat history for logging all messages that pass through AdminAgent
         self.chat_messages = UnboundedChatCompletionContext(initial_messages=[system_message])
@@ -167,6 +168,32 @@ class AdminAgent(RoutedAgent):
         
         return summary_response
     
+    @message_handler
+    async def process_selection_task(self, message: SelectionTask, ctx: MessageContext) -> SelectionResponse:
+        # Log incoming selection task (source is the sender, or "main" if None)
+        sender_key = ctx.sender.key if ctx.sender else "main"
+        await helpers.log_message(
+            self.chat_messages,
+            f"SelectionTask: select the best of {len(message.candidate_patches)} candidate patches",
+            role="user",
+            source=sender_key
+        )
+
+        if not self.selection_instances:
+            raise ValueError("No selection instances available")
+
+        selection_response = await self.send_message(message, self.selection_instances[0])
+
+        # Log selection response
+        await helpers.log_message(
+            self.chat_messages,
+            f"SelectionResponse: selected patch from '{selection_response.selected_patch}'",
+            role="assistant",
+            source="selection"
+        )
+
+        return selection_response
+
     async def process_context_patching_task(self, message: PatchingTask, ctx: MessageContext) -> PatchingResponse:
         """
         Handle context patching: first retrieve context, then send patching task with context summary.
@@ -184,7 +211,7 @@ class AdminAgent(RoutedAgent):
         )
         
         # Step 1: Run context retrieval to get context summary for this patching attempt
-        if not self.context_dict or not self._runtime:
+        if not self.context_dict or not self.runtime:
             raise ValueError("context_dict and runtime must be provided to AdminAgent for context patching")
         
         # Use the patching attempt number as the attempt number for context retrieval
@@ -194,7 +221,7 @@ class AdminAgent(RoutedAgent):
         context_summary = await helpers.run_single_attempt_context(
             attempt_num=attempt_num,
             admin_agent=self.id,
-            runtime=self._runtime,
+            runtime=self.runtime,
             context_dict=self.context_dict
         )
         print(f"[context_patching] Context retrieval completed for attempt {attempt_num}. Summary length: {len(context_summary)} characters")
@@ -249,7 +276,7 @@ class PatchingAgent(RoutedAgent):
         if agent_key in role_descriptions:
             self.role_description = role_descriptions[agent_key]
         else:
-            raise ValueError(f"Agent key '{agent_key}' not found in role_descriptions dict. Available keys: {list(role_description.keys())}")
+            raise ValueError(f"Agent key '{agent_key}' not found in role_descriptions dict. Available keys: {list(role_descriptions.keys())}")
         
         # Create system message with the role description
         # For context patching agent, context_summary will be added as a UserMessage in on_task
@@ -407,8 +434,6 @@ class PatchingAgent(RoutedAgent):
                 "patched nodes": patched_nodes,
             }
         self.candidate_patches.append(patch_info)
-
-
 
 
 # TODO: for the purposes of keeping the prompt short, remove the failing test function.
@@ -741,59 +766,129 @@ class ContextRetrievalAgent(RoutedAgent):
         else:
             return f"Unknown function: {function_name} for {file_path}"
 
-# TODO: implement this agent
 class SelectionAgent(RoutedAgent):
-    def __init__(self, model_client: ChatCompletionClient):
+    """Agent that selects the best candidate patch among those that passed all test suites."""
+
+    def __init__(self, model_client: ChatCompletionClient, role_description: str, bug_dict: BugDict):
         super().__init__("Selection Agent")
-        self._model_client = model_client
-    
+        self.model_client = model_client
+        self.bug_dict = bug_dict
+
+        # Build system message: role description + bug info, same pattern as the other agents
+        system_message_content = role_description + "\n\n"
+        system_message_content += "You are given the following context information about the bug:\n"
+        system_message_content += helpers.format_bug_info(bug_dict)
+        system_message = SystemMessage(content=system_message_content)
+
+        self.chat_messages = UnboundedChatCompletionContext(initial_messages=[system_message])
+
+    def format_candidates(self, candidate_patches: list) -> str:
+        """
+        Each candidate patch is a dict resulting from PatchingAgent's save_candidate_patch
+        List out the patched nodes in a prompt
+        Only the patched nodes are included, not the entire patched files, to keep the prompt short
+        """
+        result = "Here are the candidate patches:\n\n"
+        for patch_info in candidate_patches:
+            result += f"{'=' * 60}\n"
+            result += f"Candidate patch generated by the following agent: {patch_info['patcher id']}\n"
+            result += f"{'=' * 60}\n"
+            for modified_source_name, file_info in patch_info["files"].items():
+                result += f"File: {modified_source_name}\n"
+                for node_number, patched_node in enumerate(file_info["patched nodes"], 1):
+                    result += f"Patched node #{node_number}:\n"
+                    result += f"```java\n{patched_node}\n```\n"
+            result += "\n"
+        return result
+
+    def save_final_patch(self, patch_info: dict):
+        """
+        Copy the winning candidate's full patched files into the final patch folder.
+        A single patched file is named like lang27_patch.java; if the patch spans multiple files,
+        the class name is appended (e.g., lang27_patch_NumberUtils.java) to avoid collisions.
+        """
+        save_dir = self.bug_dict.get_info("final patch path")
+
+        files = patch_info["files"]
+        for file_info in files.values():
+            # e.g. Lang27_NumberUtils_patch.java
+            bug_label = f"{self.bug_dict.get_info('project name')}{self.bug_dict.get_info('bug id')}"
+            patch_filename = f"{bug_label}_{file_info['filename'].replace('.java', '')}_patch.java"
+            full_filepath = os.path.join(save_dir, patch_filename)
+            # TODO: check that this comment (and entire function) is correct
+            # copy contents of original patched file under candidate_patches to the final_patch directory
+            shutil.copy2(file_info["patch file path"], full_filepath)
+            print(f"[selection] Saved final patch to {full_filepath}")
+
     @message_handler
     async def on_task(self, message: SelectionTask, ctx: MessageContext) -> SelectionResponse:
-        """Select the best candidate patch from the candidate patches directory."""
-        pass
+        """Select the best candidate patch and save its full patched files as the final patch."""
+        candidate_patches = message.candidate_patches
+        # TODO: figure out what to do in the scenario where no test suites have been passed
+        if not candidate_patches:
+            print("[selection] No candidate patches passed the test suites, nothing to select.")
+            return SelectionResponse(selected_patch="")
+
+        candidate_ids = [patch_info["patcher id"] for patch_info in candidate_patches]
+
+        if len(candidate_patches) == 1:
+            # Only one candidate passed, so there is nothing to compare
+            print(f"[selection] Only one candidate ({candidate_ids[0]}), selecting it by default.")
+            selected = candidate_ids[0]
+        else:
+            # Build the prompt: prompt + list of candidates
+            instruction_content = message.message
+            instruction_content += f"\nThe candidate agents are: {', '.join(candidate_ids)}."
+            instruction_content += f"\nThe candidate patches are:\n{self.format_candidates(candidate_patches)}"
+            instruction_message = UserMessage(content=instruction_content, source="system")
+            await self.chat_messages.add_message(instruction_message)
+
+            messages = await self.chat_messages.get_messages()
+            llm_result = await self.model_client.create(
+                messages=messages,
+                cancellation_token=ctx.cancellation_token,
+            )
+            result_text = llm_result.content
+
+            # Add assistant response to context (for logging)
+            assistant_message = AssistantMessage(content=result_text, source=self.id.key)
+            await self.chat_messages.add_message(assistant_message)
+
+            # TODO: figure out a better way to enforce the agent to respond with exactly what's expected,
+            # or come back to the prompt
+            # Parse the best agent: the first line should be exactly one of (basic, context...)
+            first_line = result_text.strip().splitlines()[0].strip().strip("\"'`")
+            if first_line in candidate_ids:
+                selected = first_line
+            else:
+                print(f"[selection] Could not parse first line '{first_line}' as a patcher id, falling back to '{selected}'.")
+            print(f"[selection] Selected candidate patch generated by the following agent: {selected}")
+
+        # Save the selected agent's full patched files under the final patch folder
+        final_patch_info = next(patch_info for patch_info in candidate_patches if patch_info["patcher id"] == selected)
+        self.save_final_patch(final_patch_info)
+
+        return SelectionResponse(selected_patch=selected)
 
 
 class SummaryAgent(RoutedAgent):
     """Agent that summarizes context retrieval results."""
     
-    def __init__(self, model_client: ChatCompletionClient):
+    def __init__(self, model_client: ChatCompletionClient, role_description: str):
         super().__init__("Summary Agent")
         self.model_client = model_client
-        
-        # System message for SummaryAgent
-        system_message = SystemMessage(content=)
-        
+
+        system_message = SystemMessage(content=role_description)
         self.chat_messages = UnboundedChatCompletionContext(initial_messages=[system_message])
     
     @message_handler
     async def on_task(self, message: SummaryTask, ctx: MessageContext) -> SummaryResponse:
         """Summarize context retrieval results for the CURRENT attempt only."""
         
-        # Add instruction message with the formatted function results
-        instruction_content = f"""Please summarize the CURRENT context retrieval attempt based on the following information:
+        # Build the user instruction: the summarization prompt from the task + the function results to summarize
+        instruction_content = message.message
+        instruction_content += f"\n\nHere is the information for the current retrieval attempt:\n\n{message.function_results}"
 
-{message.function_results}
-
-CRITICAL: Each retrieval attempt contains multiple rounds. You must include ALL functions from ALL rounds in your summary.
-
-Format the summary as follows:
-- file_path:
-  - function_name: results
-  - function_name: results
-- file_path2:
-  - function_name: results
-  - function_name: results
-These functions were called to [1-2sentence describing the purpose based on the reasoning from ALL rounds].
-
-IMPORTANT FORMATTING NOTES:
-- Scan through the ENTIRE input above and find ALL "round X:" sections
-- Include ALL functions from ALL rounds you find (round 1, round 2, round 3, etc.)
-- Indent file paths with 2 spaces
-- Indent function names with 4 spaces and use "- " prefix
-- Show full results for all functions (including long lists like all_funcs_in_class)
-- TODO: Later we will filter long lists to show only top k relevant items based on bug context
-- End with "These functions were called to [1-2 sentences]" describing the purpose across all rounds"""
-        
         instruction_message = UserMessage(
             content=instruction_content,
             source="system"
