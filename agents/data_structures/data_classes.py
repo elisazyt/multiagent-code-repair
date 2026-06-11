@@ -66,8 +66,8 @@ class SelectionTask:
 
 @dataclass
 class SelectionResponse:
-    """Response from SelectionAgent with the best candidate patch."""
-    selected_patch: str
+    """Response from SelectionAgent with the best candidate patch, formatted as a string."""
+    selected_patch_description: str
 
 @dataclass
 class SummaryTask:
