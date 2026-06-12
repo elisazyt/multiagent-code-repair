@@ -526,7 +526,7 @@ async def save_message_thread(
     
     output_dir = bug_dict.get_info("chat context path")
 
-    file_path = os.path.join(output_dir, f"{file_name}_context_{agent_id}.txt")
+    file_path = os.path.join(output_dir, f"{file_name}_{agent_id}.txt")
     
     # Write messages to file
     with open(file_path, 'w', encoding='utf-8') as f:

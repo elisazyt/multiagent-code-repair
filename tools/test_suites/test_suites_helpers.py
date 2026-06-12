@@ -175,23 +175,27 @@ def get_failing_test_method_and_line(test_identifier: str, failing_test_info: st
     return (package_path, method_name, -1)  # Return -1 if line number not found
 
 
-def mark_failing_line_in_method(method_code: str, failing_line_number: int, method_start_line: int) -> str:
+def mark_failing_line_in_method(method_code: str, failing_line_number: int, method_start_line: int, window_size: int = 10) -> str:
     """
-    Add line numbers to method code and mark the failing line.
+    Add line numbers to a short method excerpt and mark the failing line.
     
     Args:
         method_code: The full method code as a string
         failing_line_number: The absolute line number where failure occurred (1-based)
         method_start_line: The line number where the method starts (1-based)
+        window_size: Number of lines to include before and after the failing line
     
     Returns:
         Method code with line numbers prefixed and failing line marked
     """
     lines = method_code.split('\n')
     method_relative_line = failing_line_number - method_start_line + 1  # 1-based within method
+
+    start_index = max(method_relative_line - window_size - 1, 0)
+    end_index = min(method_relative_line + window_size, len(lines))
     
     result_lines = []
-    for i, line in enumerate(lines, start=1):  # i is 1-based relative to method
+    for i, line in enumerate(lines[start_index:end_index], start=start_index + 1):  # i is 1-based relative to method
         absolute_line = method_start_line + i - 1
         if i == method_relative_line:
             # Mark the failing line

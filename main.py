@@ -72,8 +72,8 @@ async def main():
     admin_system_message = SystemMessage(content="Admin Agent - Message Log")
 
     # Create BugDict for Closure 3 bug (shared by all patching agents)
-    project_name = "Lang"
-    bug_id = "27"
+    project_name = "Math"
+    bug_id = "62"
 
     bug_dict = BugDict()
     bug_dict.add_project_info(project_name, bug_id)
@@ -85,10 +85,11 @@ async def main():
         joern_workspace_path=JOERN_WORKSPACE_PATH,
         defects4j_checkout_path=DEFECTS4J_CHECKOUT_PATH,
     )
+    # TODO: figure out what the path should be
     bug_dict.add_bug_locations([
         (
-            "org/apache/commons/lang3/math/NumberUtils.java",
-            [(479, 479), (488, 489)],
+            "org/apache/commons/math/optimization/univariate/MultiStartUnivariateRealOptimizer.java",
+            [(146, 146), (160, 162)],
         ),
     ])
 

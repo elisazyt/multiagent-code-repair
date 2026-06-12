@@ -40,7 +40,9 @@ class AdminAgent(RoutedAgent):
         self.summary_instances = receiver_instances.get("summary", [])
         self.selection_instances = receiver_instances.get("selection", [])
         self.context_dict = context_dict
-        self.runtime = runtime
+        # runtime is an attribute of RoutedAgent, create a separate private attribute for
+        # AdminAgent's runtime to avoid confusion
+        self._runtime = runtime
         
         # LLM chat history for logging all messages that pass through AdminAgent
         self.chat_messages = UnboundedChatCompletionContext(initial_messages=[system_message])
@@ -211,7 +213,7 @@ class AdminAgent(RoutedAgent):
         )
         
         # Step 1: Run context retrieval to get context summary for this patching attempt
-        if not self.context_dict or not self.runtime:
+        if not self.context_dict or not self._runtime:
             raise ValueError("context_dict and runtime must be provided to AdminAgent for context patching")
         
         # Use the patching attempt number as the attempt number for context retrieval
@@ -221,7 +223,7 @@ class AdminAgent(RoutedAgent):
         context_summary = await helpers.run_single_attempt_context(
             attempt_num=attempt_num,
             admin_agent=self.id,
-            runtime=self.runtime,
+            runtime=self._runtime,
             context_dict=self.context_dict
         )
         print(f"[context_patching] Context retrieval completed for attempt {attempt_num}. Summary length: {len(context_summary)} characters")
@@ -832,7 +834,6 @@ class SelectionAgent(RoutedAgent):
         if len(candidate_patches) == 1:
             # Only one candidate passed, so there is nothing to compare
             print(f"[selection] Only one candidate ({candidate_agent_names[0]}), selecting it by default.")
-            # TODO
             selected_agent_name = candidate_agent_names[0]
 
         else:
@@ -883,8 +884,8 @@ class SummaryAgent(RoutedAgent):
         super().__init__("Summary Agent")
         self.model_client = model_client
 
-        system_message = SystemMessage(content=role_description)
-        self.chat_messages = UnboundedChatCompletionContext(initial_messages=[system_message])
+        self.system_message = SystemMessage(content=role_description)
+        self.chat_messages = UnboundedChatCompletionContext(initial_messages=[self.system_message])
     
     @message_handler
     async def on_task(self, message: SummaryTask, ctx: MessageContext) -> SummaryResponse:
@@ -898,12 +899,12 @@ class SummaryAgent(RoutedAgent):
             content=instruction_content,
             source="system"
         )
-        await self.chat_messages.add_message(instruction_message)
         
-        # Get all messages (including system message and added messages)
-        messages = await self.chat_messages.get_messages()
+        # Instead of passing self.chat_messages to the prompt, which contains all previous retrieval
+        # attempts, we should only pass the system message and current round of retrieval results
+        messages = [self.system_message, instruction_message]
         
-        # Call LLM
+        # Call LLM with results from current retrieval attempt only
         llm_result = await self.model_client.create(
             messages=messages,
             cancellation_token=ctx.cancellation_token,
@@ -911,7 +912,8 @@ class SummaryAgent(RoutedAgent):
         
         summary = llm_result.content
         
-        # Add assistant response to context
+        # Add prompt for current round to log
+        await self.chat_messages.add_message(instruction_message)
         assistant_message = AssistantMessage(content=summary, source=self.id.key)
         await self.chat_messages.add_message(assistant_message)
         
