@@ -29,8 +29,6 @@ from agents.helpers import cr_functions as cr_funcs
 
 from tools.test_suites import test_suites as ts
 
-# TODO: maybe add something to track start and end time and calculate total time taken?
-
 class AdminAgent(RoutedAgent):
     def __init__(self, receiver_instances: dict[str, list[AgentId]], system_message: SystemMessage, context_dict: ContextDict = None, runtime = None):
         super().__init__("Admin Agent")
@@ -232,7 +230,8 @@ class AdminAgent(RoutedAgent):
         patching_task_with_context = PatchingTask(
             patcher_id=message.patcher_id,
             message=message.message,
-            context_summary=context_summary
+            context_summary=context_summary,
+            patching_attempt=message.patching_attempt,
         )
         
         # Step 3: Find the context patching instance
@@ -438,8 +437,6 @@ class PatchingAgent(RoutedAgent):
         self.candidate_patches.append(patch_info)
 
 
-# TODO: for the purposes of keeping the prompt short, remove the failing test function.
-# Just the failing line +/- 5-ish lines should be enough
 class TestingAgent(RoutedAgent):
     def __init__(self, bug_dict: BugDict):
         super().__init__("Testing Agent")
@@ -823,7 +820,6 @@ class SelectionAgent(RoutedAgent):
     async def on_task(self, message: SelectionTask, ctx: MessageContext) -> SelectionResponse:
         """Select the best candidate patch and save its full patched files as the final patch."""
         candidate_patches = message.candidate_patches
-        # TODO: figure out what to do in the scenario where no test suites have been passed
         if not candidate_patches:
             print("[selection] No candidate patches passed the test suites, nothing to select.")
             return SelectionResponse(selected_patch_description="No candidate patches passed the test suites, nothing to select.")

@@ -6,6 +6,9 @@ Do not assume any methods exist unless they are explicitly called or defined.
 If the patch calls a new method, it should be explicitly defined and fully implemented,
 without any placeholder logic.
 
+If API usage is absolutely necessary, import the API and use it but do not assume the API is already
+imported unless it has already been called in the code.
+
 All buggy locations should be fixed. Refactoring and commenting should not be considered fixes.
 
 The user cannot modify your code, so do not suggest incomplete code which requires others to modify.
@@ -87,7 +90,6 @@ IMPORTANT FORMATTING NOTES:
 - Indent file paths with 2 spaces
 - Indent function names with 4 spaces and use "- " prefix
 - Show full results for all functions (including long lists like all_funcs_in_class)
-- TODO: Later we will filter long lists to show only top k relevant items based on bug context
 - End with "These functions were called to [one sentence]" describing the purpose
 
 Format the summary clearly and concisely."""

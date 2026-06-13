@@ -18,6 +18,7 @@ from .joern_utils import (
     get_full_method_signature_from_line_numbers,
     get_buggy_variable_type,
     get_apis_from_var_type,
+    parse_joern_json_with_unescaped_quotes,
 )
 
 # Maps to conmment_retrieval

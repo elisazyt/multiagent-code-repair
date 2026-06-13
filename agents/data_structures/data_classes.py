@@ -53,8 +53,6 @@ class ContextRetrievalResponse:
     # function_results is the formatted string of all rounds' context retrieval results for this attempt
     # Contains reasoning and results for each round (from format_current_context)
     function_results: str
-    # TODO: consider if we need to provide the message_thread to summary agent.
-    # This may be useful if we want summary agent to filter out the top k functions/variables based on past context
 
 @dataclass
 class SelectionTask:

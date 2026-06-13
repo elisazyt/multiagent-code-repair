@@ -28,8 +28,8 @@ from tools.context_retrieval.parsing_retrieval_funcs import tree_sitter_utils as
 ########################################################
 # Helper functions for running one round of patching and testing
 ########################################################
-# TODO: For now, run 2 rounds. may need to change later
-async def run_patch_test_loop(patcher_id: str, message: str, admin_agent: AgentId, runtime: SingleThreadedAgentRuntime, num_rounds=2, context_dict=None):
+# Default: run 3 rounds of patching and testing per agent
+async def run_patch_test_loop(patcher_id: str, message: str, admin_agent: AgentId, runtime: SingleThreadedAgentRuntime, num_rounds=3, context_dict=None):
     print(f"[{patcher_id}] Loop started!")
     round = 1
 
@@ -123,16 +123,21 @@ async def run_single_attempt_context(attempt_num: int, admin_agent: AgentId, run
     # Step 2: Get past summaries from ContextDict
     past_summaries = context_dict.get_retrieved_context()
     
+
     # Step 3: Send SummaryTask to AdminAgent (which will route to SummaryAgent)
     # SummaryAgent will summarize all 3 rounds from this attempt
     # function_results already contains reasoning and results for all rounds
-    summary_task = SummaryTask(
-        function_results=context_response.function_results,  # String with reasoning and results
-        retrieval_attempt=attempt_num,
-        message=SUMMARY_PROMPT,
-    )
-    summary_response = await runtime.send_message(summary_task, recipient=admin_agent)
-    print(f"[context] Attempt {attempt_num} - Summary completed")
+    if context_response.function_results:
+        summary_task = SummaryTask(
+            function_results=context_response.function_results,  # String with reasoning and results
+            retrieval_attempt=attempt_num,
+            message=SUMMARY_PROMPT,
+        )
+        summary_response = await runtime.send_message(summary_task, recipient=admin_agent)
+        current_summary = summary_response.summary
+        print(f"[context] Attempt {attempt_num} - Summary completed")
+    else:
+        current_summary = "No context has been retrieved yet."
     
     # Step 4: Format final summary with past summaries prepended
     final_summary = ""
@@ -150,11 +155,12 @@ async def run_single_attempt_context(attempt_num: int, admin_agent: AgentId, run
     # Add current attempt summary with "Current attempt:" prefix
     final_summary += "Here is a summary of the current context retrieval attempt:\n\n"
     final_summary += "Current attempt:\n"
-    final_summary += summary_response.summary  # This already has the formatted content (without "Current attempt:" prefix)
+    final_summary += current_summary  # This already has the formatted content (without "Current attempt:" prefix)
     
     # Step 5: Store only the current attempt summary (without past summaries and without "Current attempt:" prefix) 
     # in ContextDict for future attempts. This way, when we prepend past summaries later, we don't duplicate them.
-    context_dict.add_retrieved_context_round(summary_response.summary)
+    if context_response.function_results:
+        context_dict.add_retrieved_context_round(current_summary)
     
     return final_summary
 
