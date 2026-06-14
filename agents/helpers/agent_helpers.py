@@ -347,12 +347,12 @@ def format_short_bug_info(bug_dict: BugDict) -> str:
     
     return result
 
-def format_initial_available_functions(context_dict: ContextDict) -> str:
+def format_initial_available_functions(context_dict: ContextDict, attempt_num: int) -> str:
     """
-    Only call this for the attempt 1, round 1 since there are no previous retrieval attempts
-    which list the remaining functions available to be called.
+    Initial message at the start of each new context retrieval attempt, listing functions
+    available to call in the first round of that attempt.
     """
-    result = "=== Context retrieval attempt 1 ===\n\n"
+    result = f"=== Context retrieval attempt {attempt_num} ===\n\n"
     result += format_available_functions(context_dict)
     return result
 
@@ -382,9 +382,6 @@ def format_current_context(current_round_results: dict, reasoning: str, context_
         String summarizing the current round's results
     """
     result = ""
-    if round_num == 1 and attempt_num > 1:
-        result += f"=== Context retrieval attempt {attempt_num} ===\n\n"
-
     result += "It was determined that the following context retrieval functions needed to be called to fix the bug.\n"
     result += f"The reasoning for calling these functions was: {reasoning}\n"
     
@@ -454,7 +451,8 @@ async def log_message(
 async def save_message_thread(
     context: UnboundedChatCompletionContext, 
     agent_id: str,
-    bug_dict: BugDict
+    bug_dict: BugDict,
+    messages_to_log: list=None,
 ):
     """
     Save the entire message thread from context to a .txt file.
@@ -463,8 +461,11 @@ async def save_message_thread(
         context: The ChatCompletionContext to get messages from
         agent_id: The agent identifier (e.g., "basic", "cot", "admin_agent")
         bug_dict: BugDict to extract file name from (project name + bug id)
+        messages: Optional list of messages to log. This is only used by the context retrieval agent, which has
+        archived messages not part of its chat_messages, so we need to manually pass in the messages to log
     """
-    messages = await context.get_messages()
+    if messages_to_log is None:
+        messages_to_log = await context.get_messages()
     
     # Get file name from BugDict: project_name + bug_id
     project_name = bug_dict.get_info("project name")
@@ -480,7 +481,7 @@ async def save_message_thread(
         f.write(f"{'='*80}\n")
         f.write(f"Full Message Thread (Agent: {agent_id}):\n")
         f.write(f"{'='*80}\n")
-        for i, msg in enumerate(messages, 1):
+        for i, msg in enumerate(messages_to_log, 1):
             if isinstance(msg, SystemMessage):
                 f.write(f"[{i}] System: {msg.content}\n")
             elif isinstance(msg, UserMessage):
@@ -517,8 +518,10 @@ async def save_all_message_threads(
         )
 
     if context_agent_instance is not None:
+        all_context_messages = await context_agent_instance.get_messages_to_log()
         await save_message_thread(
             context_agent_instance.chat_messages,
             agent_id="context_retrieval",
             bug_dict=bug_dict,
+            messages=all_context_messages,
         )

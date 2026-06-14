@@ -13,7 +13,7 @@ You are given the following information about the bug and bug locations:
 
 INSTRUCTIONS:
 - Do not call methods that are not confirmed to exist. If the patch calls a new method, it should be explicitly defined and fully implemented, without any placeholder logic.
-- If API usage is absolutely necessary, import the API and use it but do not assume the API is already imported unless it has already been called in the code.
+- If API usage is absolutely necessary, you MUST import the API to use it. Do not assume the API is already imported unless it has already been called elsewhere in the code.
 - All buggy locations should be fixed. Refactoring and commenting are not considered fixes.
 - Do not change any code outside of the bug locations.
 - Make sure the patch is valid Java code that can be compiled and run.

@@ -59,8 +59,7 @@ class SelectionTask:
     """Task for SelectionAgent to select the best candidate patch from the candidate patches directory."""
     # List of candidate patches
     candidate_patches: list
-    # message is the prompt
-    message: str
+    # note: we don't have a message here because the prompt is hardcoded in SelectionAgent
 
 @dataclass
 class SelectionResponse:

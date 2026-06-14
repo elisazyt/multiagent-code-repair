@@ -281,7 +281,10 @@ class PatchingAgent(RoutedAgent):
                 f"Agent key '{agent_key}' not found in agent_prompts. Available keys: {list(agent_prompts.keys())}"
             )
 
-        self.system_message = helpers.get_patching_system_message(bug_dict, patching_system_prompt, agent_specific_prompt=self.agent_prompt)
+        self.patching_system_prompt = patching_system_prompt
+        self.system_message = helpers.get_patching_system_message(
+            bug_dict, patching_system_prompt, agent_specific_prompt=self.agent_prompt
+        )
         
         # Each agent instance has its own LLM chat history (manages messages automatically)
         self.chat_messages = UnboundedChatCompletionContext(initial_messages=[self.system_message])
@@ -303,7 +306,8 @@ class PatchingAgent(RoutedAgent):
             # Recreate system message with context summary
             self.system_message = helpers.get_patching_system_message(
                 self.bug_dict,
-                self.agent_prompt,
+                self.patching_system_prompt,
+                agent_specific_prompt=self.agent_prompt,
                 context_summary=message.context_summary,
             )
             
@@ -496,16 +500,29 @@ class ContextRetrievalAgent(RoutedAgent):
         # Initialize CPG if Joern configuration is available
         self.initialize_cpg()
 
+        # full message history of prior attempts, kept for logging purposes
+        # we remove all prior attempts from the chat messages after each attempt, summarize them,
+        # and add them to the system message for the next attempt
+        self.archived_messages = []
+
         if self.id.key in agent_prompts:
-            context_retrieval_prompt = agent_prompts[self.id.key]
-            # Initialize chat_messages with the initial system_message containing the bug info
-            # and summaries of past context retrieval attempts
-            context_retrieval_msg = SystemMessage(content=helpers.get_context_retrieval_system_message(bug_dict, context_dict, context_retrieval_prompt))
-            self.chat_messages = UnboundedChatCompletionContext(initial_messages=[context_retrieval_msg])
+            self.context_retrieval_prompt = agent_prompts[self.id.key]
+            self.system_message = helpers.get_context_retrieval_system_message(
+                bug_dict, context_dict, self.context_retrieval_prompt
+            )
+            self.chat_messages = UnboundedChatCompletionContext(initial_messages=[self.system_message])
         else:
             raise ValueError(
                 f"Agent key '{self.id.key}' not found in agent_prompts. Available keys: {list(agent_prompts.keys())}"
             )
+
+    async def get_messages_to_log(self) -> list:
+        """
+        Returns the complete message history to log
+        This consists of the most recent system message + archived user messages + current attempt user messages
+        """
+        current_messages = await self.chat_messages.get_messages()
+        return [current_messages[0]] + self.archived_messages + current_messages[1:]
     
     def initialize_cpg(self):
         """Initialize Joern CPG for the project if it doesn't already exist."""
@@ -562,9 +579,21 @@ class ContextRetrievalAgent(RoutedAgent):
         if attempt_num == 2:
             self.context_dict.add_attempt2_functions()
 
-        if attempt_num == 1:
-            initial_available_message = helpers.format_initial_available_functions(self.context_dict)
-            await self.chat_messages.add_message(UserMessage(content=initial_available_message, source="system"))
+        # Archive prior attempt for the saved log, then start a new chat_messages chain for the LLM
+        # Past attempts are summarized in the system message of the new chat_messages
+        if attempt_num > 1:
+            previous_messages = await self.chat_messages.get_messages()
+            self.archived_messages.extend(
+                msg for msg in previous_messages if not isinstance(msg, SystemMessage)
+            )
+
+        self.system_message = helpers.get_context_retrieval_system_message(
+            self.bug_dict, self.context_dict, self.context_retrieval_prompt
+        )
+        self.chat_messages = UnboundedChatCompletionContext(initial_messages=[self.system_message])
+
+        initial_available_message = helpers.format_initial_available_functions(self.context_dict, attempt_num)
+        await self.chat_messages.add_message(UserMessage(content=initial_available_message, source="system"))
 
         # Loop through rounds internally (up to 3 rounds per attempt)
         round = 1
@@ -810,10 +839,9 @@ class SelectionAgent(RoutedAgent):
 
         else:
             # Build the prompt: prompt + list of candidate patches
-            formatted_task = f"SelectionTask: {message.message}"
+            formatted_task = "Follow the instructions in the system message to select the best candidate patch."
             formatted_task += f"\nThe agents that generated the candidate patches are: {', '.join(candidate_agent_names)}."
             formatted_task += f"\nThe candidate patches are:\n{self.format_candidates(candidate_patches)}"
-            formatted_task += "\nRemember to respond with the name of the agent that generated the best candidate patch in the first line, and nothing else."
             instruction_message = UserMessage(content=formatted_task, source="system")
             await self.chat_messages.add_message(instruction_message)
 

@@ -58,7 +58,7 @@ JOERN_WORKSPACE_PATH = os.path.join(project_root, "tests", "test_results", "exte
 # path to folder where Defects4J projects are checked out, tests are run, etc.
 DEFECTS4J_CHECKOUT_PATH = os.path.join(project_root, "tests", "test_results", "external_tools", "defects4j_checkouts")
 
-NUM_PATCHING_ROUNDS = 3
+NUM_PATCHING_ROUNDS = 2
 
 async def main():
     start_time = time.perf_counter()
@@ -147,7 +147,6 @@ async def main():
             model_client=model_client,
             context_dict=context_dict,
             bug_dict=bug_dict,
-            patching_system_prompt=PATCHING_SYSTEM_PROMPT,
             agent_prompts=agent_prompts,
         )
         context_agent_instance_ref = context_agent
@@ -155,7 +154,7 @@ async def main():
 
     # Register the classes
     await AdminAgent.register(runtime, "admin", admin_agent_factory)
-    await PatchingAgent.register(runtime, "patching", lambda: PatchingAgent(model_client, bug_dict, agent_prompts))
+    await PatchingAgent.register(runtime, "patching", lambda: PatchingAgent(model_client, bug_dict, PATCHING_SYSTEM_PROMPT, agent_prompts))
     await TestingAgent.register(runtime, "testing", lambda: TestingAgent(bug_dict))
     await ContextRetrievalAgent.register(runtime, "context_retrieval", context_agent_factory)
     await SummaryAgent.register(runtime, "summary", lambda: SummaryAgent(model_client, agent_prompts))
@@ -184,8 +183,7 @@ async def main():
 
         # All loops are done: select the best candidate among all the patches that passed all test suites
         selection_task = SelectionTask(
-            candidate_patches=PatchingAgent.candidate_patches,
-            message="Select the best candidate patch as described previously.",
+            candidate_patches=PatchingAgent.candidate_patches
         )
         selection_response = await runtime.send_message(selection_task, recipient=admin_agent)
         print(selection_response.selected_patch_description)
