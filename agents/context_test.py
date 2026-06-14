@@ -17,6 +17,7 @@ from agents import ContextRetrievalAgent
 from data_classes import ContextRetrievalTask
 from dicts import BugDict, ContextDict
 from agent_helpers import save_message_thread
+from prompt_templates import CONTEXT_RETRIEVAL_PROMPT
 
 # Load environment variables from .env file
 env_path = os.path.join(project_root, '.env')
@@ -60,17 +61,13 @@ async def test_context_retrieval():
         batch_size=8,
     )
     
-    # Create ContextRetrievalAgent
-    role_description = """You are a context retrieval agent. Your job is to retrieve relevant context information 
-    for bug fixing. You can request context retrieval functions for specific files. Only request functions that are 
-    actually needed to understand and fix the bug."""
-    
+    agent_prompts = {"context_retrieval": CONTEXT_RETRIEVAL_PROMPT}
+
     agent = ContextRetrievalAgent(
         model_client=model_client,
         context_dict=context_dict,
-        role_description=role_description,
-        past_summary="",
         bug_dict=bug_dict,
+        agent_prompts=agent_prompts,
     )
     
     # Create a test task

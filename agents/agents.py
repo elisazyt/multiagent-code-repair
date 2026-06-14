@@ -29,12 +29,15 @@ from agents.helpers import cr_functions as cr_funcs
 
 from tools.test_suites import test_suites as ts
 
+# this is the maximum number of rounds of context retrieval performed per patching/retrieval attempt
+MAX_ROUNDS = 3
+
 class AdminAgent(RoutedAgent):
-    def __init__(self, receiver_instances: dict[str, list[AgentId]], system_message: SystemMessage, context_dict: ContextDict = None, runtime = None):
+    def __init__(self, receiver_instances: dict[str, list[AgentId]], context_dict: ContextDict = None, runtime = None):
         super().__init__("Admin Agent")
         self.patching_instances = receiver_instances.get("patching", [])
         self.testing_instances = receiver_instances.get("testing", [])
-        self.context_instances = receiver_instances.get("context", [])
+        self.context_instances = receiver_instances.get("context_retrieval", [])
         self.summary_instances = receiver_instances.get("summary", [])
         self.selection_instances = receiver_instances.get("selection", [])
         self.context_dict = context_dict
@@ -42,11 +45,10 @@ class AdminAgent(RoutedAgent):
         # AdminAgent's runtime to avoid confusion
         self._runtime = runtime
         
-        # LLM chat history for logging all messages that pass through AdminAgent
-        self.chat_messages = UnboundedChatCompletionContext(initial_messages=[system_message])
+        # Log of messages routed through AdminAgent (not sent to an LLM)
+        self.chat_messages = UnboundedChatCompletionContext(initial_messages=[])
     
     def get_chat_messages(self) -> UnboundedChatCompletionContext:
-        """Get the LLM chat message history for logging/debugging"""
         return self.chat_messages
 
     @message_handler
@@ -137,7 +139,7 @@ class AdminAgent(RoutedAgent):
             self.chat_messages,
             f"ContextRetrievalResponse (retrieval_attempt={context_response.retrieval_attempt}): {context_response.function_results}...",
             role="assistant",
-            source="context"
+            source="context_retrieval"
         )
         
         return context_response
@@ -264,24 +266,22 @@ class PatchingAgent(RoutedAgent):
     #  across all runs, for all patching agent instances
     candidate_patches = []
     
-    def __init__(self, model_client: ChatCompletionClient, bug_dict: BugDict, role_descriptions: dict[str, str]):
+    def __init__(self, model_client: ChatCompletionClient, bug_dict: BugDict, patching_system_prompt: str, agent_prompts: dict[str, str]):
         super().__init__("Patching Agent")
-        # create OpenAI chat completion client
         self.model_client = model_client
-
         self.bug_dict = bug_dict
         
-        # role_descriptions can be a string or a dict mapping agent keys to role description strings
+        # agent_prompts is a dict mapping agent keys to its specific prompt string
         # If it's a dict, look up the role description based on self.id.key (set by super().__init__)
         agent_key = self.id.key
-        if agent_key in role_descriptions:
-            self.role_description = role_descriptions[agent_key]
+        if agent_key in agent_prompts:
+            self.agent_prompt = agent_prompts[agent_key]
         else:
-            raise ValueError(f"Agent key '{agent_key}' not found in role_descriptions dict. Available keys: {list(role_descriptions.keys())}")
-        
-        # Create system message with the role description
-        # For context patching agent, context_summary will be added as a UserMessage in on_task
-        self.system_message = helpers.get_system_message(bug_dict, self.role_description)
+            raise ValueError(
+                f"Agent key '{agent_key}' not found in agent_prompts. Available keys: {list(agent_prompts.keys())}"
+            )
+
+        self.system_message = helpers.get_patching_system_message(bug_dict, patching_system_prompt, agent_specific_prompt=self.agent_prompt)
         
         # Each agent instance has its own LLM chat history (manages messages automatically)
         self.chat_messages = UnboundedChatCompletionContext(initial_messages=[self.system_message])
@@ -295,16 +295,16 @@ class PatchingAgent(RoutedAgent):
             PatchingAgent.instances_dict[self.id.key] = self
         
         # If context_summary is provided, recreate the system message with context summary included
-        # This is for context patching agent
+        # This is for the context patching agent ONLY
         if message.context_summary:
             # Get existing messages to preserve conversation history
             existing_messages = await self.chat_messages.get_messages()
             
             # Recreate system message with context summary
-            self.system_message = helpers.get_system_message(
-                self.bug_dict, 
-                self.role_description, 
-                context_summary=message.context_summary
+            self.system_message = helpers.get_patching_system_message(
+                self.bug_dict,
+                self.agent_prompt,
+                context_summary=message.context_summary,
             )
             
             # Recreate context with new system message, preserving all non-system messages
@@ -487,7 +487,7 @@ class TestingAgent(RoutedAgent):
 
 
 class ContextRetrievalAgent(RoutedAgent):
-    def __init__(self, model_client: ChatCompletionClient, context_dict: ContextDict, role_description: str, past_summary: str, bug_dict: BugDict):
+    def __init__(self, model_client: ChatCompletionClient, context_dict: ContextDict, bug_dict: BugDict, agent_prompts: dict[str, str]):
         super().__init__("Context Retrieval Agent")
         self.context_dict = context_dict
         self.bug_dict = bug_dict
@@ -496,14 +496,16 @@ class ContextRetrievalAgent(RoutedAgent):
         # Initialize CPG if Joern configuration is available
         self.initialize_cpg()
 
-        # Build system message with bug information (if available) and past context
-        system_message_content = role_description + "\n\n"
-        system_message_content += "You are given the following context information about the bug:\n"
-        system_message_content += helpers.format_bug_info(bug_dict) + "\n\n"
-        system_message_content += helpers.format_past_context(context_dict, past_summary, bug_dict)
-        
-        system_message = SystemMessage(content=system_message_content)
-        self.chat_messages = UnboundedChatCompletionContext(initial_messages=[system_message])
+        if self.id.key in agent_prompts:
+            context_retrieval_prompt = agent_prompts[self.id.key]
+            # Initialize chat_messages with the initial system_message containing the bug info
+            # and summaries of past context retrieval attempts
+            context_retrieval_msg = SystemMessage(content=helpers.get_context_retrieval_system_message(bug_dict, context_dict, context_retrieval_prompt))
+            self.chat_messages = UnboundedChatCompletionContext(initial_messages=[context_retrieval_msg])
+        else:
+            raise ValueError(
+                f"Agent key '{self.id.key}' not found in agent_prompts. Available keys: {list(agent_prompts.keys())}"
+            )
     
     def initialize_cpg(self):
         """Initialize Joern CPG for the project if it doesn't already exist."""
@@ -553,17 +555,20 @@ class ContextRetrievalAgent(RoutedAgent):
     async def on_task(self, message: ContextRetrievalTask, ctx: MessageContext) -> ContextRetrievalResponse:
         # Initialize tools, wrap in list since OpenAI API expects tools to be a list
         tools = [create_context_retrieval_function()]
-        max_rounds = 3  # Each attempt consists of up to 3 rounds
+        max_rounds = MAX_ROUNDS  # Each attempt consists of up to MAX_ROUNDS rounds
         all_retrieval_results = ""  # String for logging (not used in final response)
-        
+        attempt_num = message.retrieval_attempt
+
+        if attempt_num == 2:
+            self.context_dict.add_attempt2_functions()
+
+        if attempt_num == 1:
+            initial_available_message = helpers.format_initial_available_functions(self.context_dict)
+            await self.chat_messages.add_message(UserMessage(content=initial_available_message, source="system"))
+
         # Loop through rounds internally (up to 3 rounds per attempt)
         round = 1
         while round <= max_rounds:
-            
-            # Add round 2 functions (similar_lines_of_code, similar_function_name) at the start of round 2
-            if round == 2:
-                self.context_dict.add_round2_functions()
-
             # Call LLM for this round
             messages = await self.chat_messages.get_messages()
             llm_result = await self.model_client.create(
@@ -576,10 +581,10 @@ class ContextRetrievalAgent(RoutedAgent):
             # - str: LLM responded with text (e.g., "I have enough context")
             # - list[FunctionCall]: LLM called the request_context function (always a list when function is called)
             if isinstance(llm_result.content, str):
-                # TODO: remove this once we have a better way to handle the case where the LLM does not call the function
-                if "enough" in llm_result.content.lower():
+                # TODO: test out a few times to make sure LLM actually listens to instructions
+                if "I have enough context" in llm_result.content.lower():
                     break
-                # Otherwise, continue to next round (might be an error message)
+                # Otherwise, continue to next round (llm didn't follow instructions correctly, this is ideally never reached)
                 round += 1
                 continue
             
@@ -623,6 +628,7 @@ class ContextRetrievalAgent(RoutedAgent):
                 continue
 
             # Debug: Show what LLM actually requested vs what it said in reasoning
+            # TODO: remove this later?
             all_requested = []
             for file_path, func_calls in file_functions.items():
                 for func_call_dict in func_calls:
@@ -676,8 +682,9 @@ class ContextRetrievalAgent(RoutedAgent):
             
             # Add state summary at the END of the round (after results are stored)
             # Format current round results as string and append to all_retrieval_results
-            # Pass only the current round's results (as a list with one element) and the round number
-            current_round_results_string = helpers.format_current_context([current_round_results], reasoning, self.context_dict, round_num=round)
+            # Pass only the current round's results and the round number
+            current_round_results_string = helpers.format_current_context(
+                current_round_results, reasoning, self.context_dict, round_num=round, attempt_num=attempt_num)
             await self.chat_messages.add_message(UserMessage(content=current_round_results_string, source="system"))
             all_retrieval_results += current_round_results_string
             
@@ -766,70 +773,39 @@ class ContextRetrievalAgent(RoutedAgent):
             return f"Unknown function: {function_name} for {file_path}"
 
 class SelectionAgent(RoutedAgent):
-    """Agent that selects the best candidate patch among those that passed all test suites."""
+    """
+    Agent that selects the best candidate patch among those that passed all test suites.
+    """
 
-    def __init__(self, model_client: ChatCompletionClient, role_description: str, bug_dict: BugDict):
+    def __init__(self, model_client: ChatCompletionClient, bug_dict: BugDict, agent_prompts: dict[str, str]):
         super().__init__("Selection Agent")
         self.model_client = model_client
         self.bug_dict = bug_dict
 
         # Build system message: role description + bug info, same pattern as the other agents
-        system_message_content = role_description + "\n\n"
-        system_message_content += "You are given the following context information about the bug:\n"
-        system_message_content += helpers.format_bug_info(bug_dict)
-        system_message = SystemMessage(content=system_message_content)
+        if self.id.key in agent_prompts:
+            selection_msg = agent_prompts[self.id.key]
+            selection_msg = selection_msg.replace("{bug_info}", helpers.format_bug_info(bug_dict).rstrip())
+            system_message = SystemMessage(content=selection_msg)
+        else:
+            raise ValueError(
+                f"Agent key '{self.id.key}' not found in agent_prompts. Available keys: {list(agent_prompts.keys())}"
+            )
 
         self.chat_messages = UnboundedChatCompletionContext(initial_messages=[system_message])
-
-    def format_candidates(self, candidate_patches: list) -> str:
-        """
-        Each candidate patch is a dict resulting from PatchingAgent's save_candidate_patch
-        List out the patched nodes in a prompt
-        Only the patched nodes are included, not the entire patched files, to keep the prompt short
-        """
-        result = "Here are the candidate patches:\n\n"
-        for patch_info in candidate_patches:
-            result += f"{'=' * 60}\n"
-            result += f"Candidate patch generated by the following agent: {patch_info['patcher id']}\n"
-            result += f"{'=' * 60}\n"
-            for modified_source_name, file_info in patch_info["files"].items():
-                result += f"File: {modified_source_name}\n"
-                for node_number, patched_node in enumerate(file_info["patched nodes"], 1):
-                    result += f"Patched node #{node_number}:\n"
-                    result += f"```java\n{patched_node}\n```\n"
-            result += "\n"
-        return result
-
-    def save_final_patch(self, patch_info: dict):
-        """
-        Copy the winning candidate's full patched files into the final patch folder.
-        """
-        save_dir = self.bug_dict.get_info("final patch path")
-
-        files = patch_info["files"]
-        for file_info in files.values():
-            # name for patched file: e.g. Lang27_NumberUtils_patch.java
-            bug_label = f"{self.bug_dict.get_info('project name')}{self.bug_dict.get_info('bug id')}"
-            patch_filename = f"{bug_label}_{file_info['filename'].replace('.java', '')}_patch.java"
-            full_filepath = os.path.join(save_dir, patch_filename)
-            # copy contents of original patched file under candidate_patches to the final_patch directory
-            shutil.copy2(file_info["patch file path"], full_filepath)
-            print(f"[selection] Saved final patch to {full_filepath}")
 
     @message_handler
     async def on_task(self, message: SelectionTask, ctx: MessageContext) -> SelectionResponse:
         """Select the best candidate patch and save its full patched files as the final patch."""
         candidate_patches = message.candidate_patches
         if not candidate_patches:
-            print("[selection] No candidate patches passed the test suites, nothing to select.")
             return SelectionResponse(selected_patch_description="No candidate patches passed the test suites, nothing to select.")
 
         # get the names of only the agents that generated the candidate patches
         candidate_agent_names = [patch_info["patcher id"] for patch_info in candidate_patches]
 
         if len(candidate_patches) == 1:
-            # Only one candidate passed, so there is nothing to compare
-            print(f"[selection] Only one candidate ({candidate_agent_names[0]}), selecting it by default.")
+            # Only one candidate passed so it's the best by default
             selected_agent_name = candidate_agent_names[0]
 
         else:
@@ -872,15 +848,57 @@ class SelectionAgent(RoutedAgent):
 
         return SelectionResponse(selected_patch_description=final_patch_description)
 
+    def format_candidates(self, candidate_patches: list) -> str:
+        """
+        Each candidate patch is a dict resulting from PatchingAgent's save_candidate_patch
+        List out the patched nodes in a prompt
+        Only the patched nodes are included, not the entire patched files, to keep the prompt short
+        """
+        result = "Here are the candidate patches:\n\n"
+        for patch_info in candidate_patches:
+            result += f"{'=' * 60}\n"
+            result += f"Candidate patch generated by the following agent: {patch_info['patcher id']}\n"
+            result += f"{'=' * 60}\n"
+            for modified_source_name, file_info in patch_info["files"].items():
+                result += f"File: {modified_source_name}\n"
+                for node_number, patched_node in enumerate(file_info["patched nodes"], 1):
+                    result += f"Patched node #{node_number}:\n"
+                    result += f"```java\n{patched_node}\n```\n"
+            result += "\n"
+        return result
+
+    def save_final_patch(self, patch_info: dict):
+        """
+        Copy the winning candidate's full patched files into the final patch folder.
+        """
+        save_dir = self.bug_dict.get_info("final patch path")
+
+        files = patch_info["files"]
+        for file_info in files.values():
+            # name for patched file: e.g. Lang27_NumberUtils_patch.java
+            bug_label = f"{self.bug_dict.get_info('project name')}{self.bug_dict.get_info('bug id')}"
+            patch_filename = f"{bug_label}_{file_info['filename'].replace('.java', '')}_patch.java"
+            full_filepath = os.path.join(save_dir, patch_filename)
+            # copy contents of original patched file under candidate_patches to the final_patch directory
+            shutil.copy2(file_info["patch file path"], full_filepath)
+            print(f"[selection] Saved final patch to {full_filepath}")
+
 
 class SummaryAgent(RoutedAgent):
     """Agent that summarizes context retrieval results."""
     
-    def __init__(self, model_client: ChatCompletionClient, role_description: str):
+    def __init__(self, model_client: ChatCompletionClient, agent_prompts: dict[str, str]):
         super().__init__("Summary Agent")
         self.model_client = model_client
 
-        self.system_message = SystemMessage(content=role_description)
+        if self.id.key in agent_prompts:
+            summary_prompt = agent_prompts[self.id.key]
+        else:
+            raise ValueError(
+                f"Agent key '{self.id.key}' not found in agent_prompts. Available keys: {list(agent_prompts.keys())}"
+            )
+
+        self.system_message = SystemMessage(content=summary_prompt)
         self.chat_messages = UnboundedChatCompletionContext(initial_messages=[self.system_message])
     
     @message_handler

@@ -21,22 +21,26 @@ from agents.data_structures.data_classes import (
     SummaryTask,
 )
 from agents.data_structures.dicts import BugDict, ContextDict
-from agents.prompt_templates import SUMMARY_PROMPT
 from tools.context_retrieval.parsing_retrieval_funcs import tree_sitter_utils as utils
 
 
 ########################################################
-# Helper functions for running one round of patching and testing
+# Helper functions for running one round of agent interactions
 ########################################################
-# Default: run 3 rounds of patching and testing per agent
-async def run_patch_test_loop(patcher_id: str, message: str, admin_agent: AgentId, runtime: SingleThreadedAgentRuntime, num_rounds=3, context_dict=None):
-    print(f"[{patcher_id}] Loop started!")
+async def run_patch_test_loop(patcher_id: str, admin_agent: AgentId, runtime: SingleThreadedAgentRuntime,
+                              num_rounds: int = 3, context_dict: ContextDict = None) -> int:
+    """
+    Run num_rounds rounds of patching and testing for a given PatchingAgent
+    Default 3 rounds if user doesn't specify
+    """
+    print(f"[{patcher_id}] Loop started")
     round = 1
 
+    # TODO: remove this?
     while (round <= num_rounds):
         # Create patching task (initial or regeneration)
         if (round == 1):
-            patching_task = PatchingTask(patcher_id=patcher_id, message=message, patching_attempt=round)
+            patching_task = PatchingTask(patcher_id=patcher_id, message="Follow the instructions to generate a patch.", patching_attempt=round)
         else:
             # Reprompt to regenerate the patch
             patching_task = PatchingTask(patcher_id=patcher_id, message=f"Based on the previous messages and failing test information, regenerate the patch.", patching_attempt=round)
@@ -94,9 +98,9 @@ async def run_single_attempt_context(attempt_num: int, admin_agent: AgentId, run
     """
     Run a single ATTEMPT of context retrieval (consists of up to 3 rounds).
     
-    Flow:
+    Workflow:
     1. Send ContextRetrievalTask to AdminAgent
-    2. AdminAgent routes to ContextRetrievalAgent (does up to 3 rounds internally)
+    2. AdminAgent routes to ContextRetrievalAgent
     3. ContextRetrievalAgent returns ContextRetrievalResponse (with function_results containing all rounds' results and reasoning)
     4. Send SummaryTask to AdminAgent (which routes to SummaryAgent)
     5. SummaryAgent returns SummaryResponse (summarizes all 3 rounds)
@@ -123,15 +127,14 @@ async def run_single_attempt_context(attempt_num: int, admin_agent: AgentId, run
     # Step 2: Get past summaries from ContextDict
     past_summaries = context_dict.get_retrieved_context()
     
-
     # Step 3: Send SummaryTask to AdminAgent (which will route to SummaryAgent)
-    # SummaryAgent will summarize all 3 rounds from this attempt
+    # SummaryAgent will summarize all NUM_ROUNDS rounds from this attempt
     # function_results already contains reasoning and results for all rounds
     if context_response.function_results:
         summary_task = SummaryTask(
             function_results=context_response.function_results,  # String with reasoning and results
             retrieval_attempt=attempt_num,
-            message=SUMMARY_PROMPT,
+            message="Summarize the current context retrieval attempt as described previously.",
         )
         summary_response = await runtime.send_message(summary_task, recipient=admin_agent)
         current_summary = summary_response.summary
@@ -160,7 +163,7 @@ async def run_single_attempt_context(attempt_num: int, admin_agent: AgentId, run
     # Step 5: Store only the current attempt summary (without past summaries and without "Current attempt:" prefix) 
     # in ContextDict for future attempts. This way, when we prepend past summaries later, we don't duplicate them.
     if context_response.function_results:
-        context_dict.add_retrieved_context_round(current_summary)
+        context_dict.add_retrieved_context_attempt(current_summary)
     
     return final_summary
 
@@ -187,46 +190,44 @@ def is_valid_format(file_functions) -> bool:
 # Helper functions for getting and formatting information
 ########################################################
 
-def get_system_message(bug_dict: BugDict, role_description: str, context_summary: str = "") -> SystemMessage:
-        msg = f"""{role_description}
+def get_patching_system_message(bug_dict: BugDict, patching_system_prompt: str, agent_specific_prompt: str, context_summary: str = "") -> SystemMessage:
+    """
+    Get the system message for a PatchingAgent
+    agent_specific_prompt differs for every type of PatchingAgent
+    context_summary is only provided for the context patching agent, it is a summary of the context retrieval results
+    """
+    # Let msg be the generic patching prompt, then replace the placeholders with the agent-specific content
+    msg = patching_system_prompt
+    msg = msg.replace("{agent_specific_prompt}", agent_specific_prompt)
+    msg = msg.replace("{bug_info}", format_bug_info(bug_dict).rstrip())
 
-You are given the following context information about the bug:\n"""
-        msg += format_bug_info(bug_dict)
+    # Add context summary if provided (for context patching agent)
+    if context_summary:
+        context_summary_str = f"Additionally, a context retrieval agent has retrieved the following info about the bug:\n{context_summary.rstrip()}"
+        msg = msg.replace("{context_summary}", context_summary_str)
+    else:
+        msg = msg.replace("{context_summary}", "")
+    
+    return SystemMessage(content=msg)
 
-        # Add context summary if provided (for context patching agent)
-        if context_summary:
-            msg += f"\n\nAdditionally, a context retrieval agent has retrieved the following info about the bug:\n{context_summary}\n"
+def get_context_retrieval_system_message(bug_dict: BugDict, context_dict: ContextDict, prompt_template: str,) -> SystemMessage:
+    """
+    Get the system message for a ContextRetrievalAgent using the provided prompt template
+    First, provide bug info to the agent
+    Then, format past context retrieval attempts (from previous patching attempts). This is called when
+    initializing the ContextRetrievalAgent, as all prior attempt summaries should be provided at once
+    """
+    msg = prompt_template
+    msg = msg.replace("{bug_info}", format_short_bug_info(bug_dict).rstrip())
 
-        # Add reminder about markdown format
-        msg += f'''\n\nREMINDER - CRITICAL FORMATTING REQUIREMENTS:
-        
-        You must return SEPARATE markdown code blocks for EACH unique buggy node. Each unique buggy node (method/class) must have its own distinct markdown code block.
-        
-        Format for each patch:
-        ```java
-        [patch code for this specific buggy node]
-        ```
-        
-        CRITICAL RULES:
-        1. If there are N unique buggy nodes, you MUST provide N separate markdown code blocks (one per node).
-        2. DO NOT combine multiple buggy nodes into a single code block. Each node gets its own block.
-        3. If multiple bug locations are within the same method/class node, provide only ONE patch for that entire node (not one per bug location).
-        4. Each code block should contain the complete fixed code for that one buggy node only.
-        5. Do not use markdown format for anything that is not a patch. Only use markdown format for the patches.
-        
-        Example: If you have 2 unique buggy nodes (e.g., methodA and methodB), you must provide:
-        ```java
-        [complete fixed code for methodA]
-        ```
-        
-        ```java
-        [complete fixed code for methodB]
-        ```
-        
-        Additionally, briefly explain your reasoning for the patches.
-        '''
-        
-        return SystemMessage(content=msg)
+    past_retrieval_attempts = context_dict.get_retrieved_context()
+    if past_retrieval_attempts:
+        past_retrieval_str = "".join(f"{attempt_summary}\n" for attempt_summary in past_retrieval_attempts)
+    else:
+        past_retrieval_str = "No past context retrieval attempts."
+    msg = msg.replace("{past_retrieval_attempts}", past_retrieval_str)
+
+    return SystemMessage(content=msg)
 
 def format_bug_info(bug_dict: BugDict) -> str:
     """Format bare minimum bug information without additional analysis"""
@@ -331,6 +332,7 @@ def format_bugs_grouped_by_node(buggy_file_info, bug_dict: BugDict, start_number
 def format_short_bug_info(bug_dict: BugDict) -> str:
     """
     Format only the bug locations for context retrieval instructions
+    Helper for format_past_context
     """
     bug_locations = bug_dict.get_info("bug files and locations")
     result = ""
@@ -345,121 +347,55 @@ def format_short_bug_info(bug_dict: BugDict) -> str:
     
     return result
 
-
-def format_past_context(context_dict: ContextDict, repair_summary: str = "", bug_dict: BugDict = None) -> str:
-    """Format past context retrieval attempts (from previous patching attempts) as a string for LLM"""
-    retrieved = context_dict.get_retrieved_context()
-
-    result = "Below is a summary of past repair attempts and the failed tests:\n"
-    if repair_summary:
-        result += repair_summary
-        result += "\n\n"
-    
-    result += "Below is a summary of past context retrieval attempts:\n"
-    if retrieved:
-        for round_summary in retrieved:
-            result += f"{round_summary}\n"
-        result += "\n"
-    
-    # Show bug locations
-    if bug_dict is not None:
-        result += "\nHere are all the bug locations and their corresponding start and end lines, which can also be found above:\n"
-        result += format_short_bug_info(bug_dict)
-    
-    # TODO: consolidate this into prompt_templates.py
-    # Show available functions per file with clear instructions
-    result += "\nHere are the functions you can call and their arguments:\n"
-    result += "\nThese functions are available to call in every round:\n"
-    result += "- comment_retrieval(start_line, end_line): retrieve comments before the bug location\n"
-    result += "- all_funcs_in_class(start_line, end_line): retrieve all method signatures in the class containing the bug location\n"
-    result += "- one_hop_api_retrieval(start_line, end_line, var): retrieve 1-hop APIs callable on the specified variable. Requires both the bug location (start_line, end_line) and the variable name (var). This function should only be called on suspicious variables.\n"
-    result += "- get_callers(start_line, end_line): retrieve all callers of the function enclosing the bug location\n"
-    result += "\nThese functions are only available from the second round onwards:\n"
-    result += "- similar_lines_of_code(start_line, end_line): retrieve top k similar lines of code to the bug location\n"
-    result += "- similar_function_name(start_line, end_line): retrieve top k functions with most similar name to the function containing the bug location\n"
-    
-    result += "The arguments must be labeled as one of \"start_line\", \"end_line\", or \"var\".\n"
-    result += "\"start_line\" and \"end_line\" can be used to specify a bug location that you want to retrieve context for. It should match one of the bug locations listed above.\n"
-    result += "\"var\" can be used to specify a variable that you want to retrieve context for.\n"
-    result += "Note: For one_hop_api_retrieval, you MUST provide both start_line, end_line, AND var, as the function needs the bug location to find the variable in context.\n\n"
-    
-    result += "The function calls should be formatted as follows:\n"
-    result += "{\n"
-    result += "  \"file_functions\": {\n"
-    result += "    \"file.java\": [\n"
-    result += "      {\"function_1\": {\"start_line\": 1, \"end_line\": 2}},\n"
-    result += "      {\"one_hop_api_retrieval\": {\"start_line\": 1, \"end_line\": 2, \"var\": \"variable_name\"}},\n"
-    result += "      {\"function_3\": {}}\n"
-    result += "    ]\n"
-    result += "  },\n"
-    result += "  \"reasoning\": \"...\"\n"
-    result += "}\n\n"
-    
-    result += "IMPORTANT: If you do not want to retrieve any more context, respond with text (e.g., 'I have enough context') instead of calling the function.\n"
-    result += "If you call the function, you MUST provide 'file_functions' with at least one function and the required arguments for each function.\n\n"
-    
-    result += "For each file, the remaining functions are available to call:\n"
-    available_functions_dict = context_dict.get_available_functions()
-    
-    if not available_functions_dict:
-        result += "  No files available for context retrieval.\n"
-    else:
-        for file_path in sorted(available_functions_dict.keys()):
-            available_for_file = available_functions_dict[file_path]
-            if available_for_file:
-                result += f"  - {file_path}: {', '.join(available_for_file)}\n"
-    
-    result += "\nIMPORTANT: Only use file paths and function names listed above. Do not make up file paths or function names.\n"
-    result += "Additionally, only choose the functions that are necessary for fixing the bug. Do not call all functions just because they are available.\n"
-
-    result += "IMPORTANT: Make sure you format the function calls exactly as shown in the example above.\n"
-    result += "It should be a dictionary with exactly two keys: 'file_functions' and 'reasoning'.\n"
-    result += "The 'file_functions' key should be a dictionary with the file path as the key and the value should be a LIST of function calls, even if there is only one function call.\n"
-    
-    # TODO: Add instructions for extra params (e.g., specify which variables/methods to retrieve info on)
+def format_initial_available_functions(context_dict: ContextDict) -> str:
+    """
+    Only call this for the attempt 1, round 1 since there are no previous retrieval attempts
+    which list the remaining functions available to be called.
+    """
+    result = "=== Context retrieval attempt 1 ===\n\n"
+    result += format_available_functions(context_dict)
     return result
 
 
-def format_current_context(all_retrieval_results: list, reasoning: str, context_dict: ContextDict, round_num: int = None) -> str:
-    """Format current round's retrieval results (lightweight summary for LLM during retrieval rounds).
+def format_current_context(current_round_results: dict, reasoning: str, context_dict: ContextDict,
+                           round_num: int, attempt_num: int) -> str:
+    """
+    Format results for the current round of context retrieval.
+    This is called in on_task for the ContextRetrievalAgent, where we add it to the chat_messages.
     
     Args:
         all_retrieval_results: List of rounds, where each round is a dict of file_path -> dict of function_name -> results
             Example: [
                 {
-                    "file1.java": {"comment_retrieval": "results...", "api_retrieval_1hop": "results..."},
-                    "file2.java": {"api_retrieval_2hop": "results..."}
+                    "file1.java": {"func1": "results...", "func2": "results..."},
+                    "file2.java": {"func3": "results..."}
                 },
                 {
-                    "file3.java": {"callgraph_retrieval": "results..."}
+                    "file3.java": {"func4": "results..."}
                 }
             ]
-            Round number = index + 1 (index 0 = round 1, index 1 = round 2, etc.)
-        reasoning: The LLM's reasoning for the CURRENT round only
+        reasoning: The LLM's reasoning for the current round of context retrieval
         context_dict: ContextDict to get available functions per file
-        round_num: The actual round number (1-indexed). If None, calculates from list length.
+        round_num: The actual round number (1-indexed)
     
     Returns:
-        String summarizing the CURRENT round's results (not all previous rounds - those are in conversation history)
+        String summarizing the current round's results
     """
-    if not all_retrieval_results:
-        return "No context retrieved yet in this session.\n"
+    result = ""
+    if round_num == 1 and attempt_num > 1:
+        result += f"=== Context retrieval attempt {attempt_num} ===\n\n"
+
+    result += "It was determined that the following context retrieval functions needed to be called to fix the bug.\n"
+    result += f"The reasoning for calling these functions was: {reasoning}\n"
     
-    # Only show the MOST RECENT round (the current one)
-    current_round_results = all_retrieval_results[-1]
-    # Use provided round_num or calculate from list length
-    current_round_num = round_num
-    
-    result = f"It was determined that the following context retrieval functions needed to be called to fix the bug.\n"
-    if reasoning:
-        result += f"The reasoning for calling these functions was: {reasoning}\n"
-    
-    # Handle empty rounds
+    # format all function call results for each file, if it exists
     if not current_round_results:
-        result += f"\nNo results in Round {current_round_num} because no valid functions were requested or all requested functions were invalid/already called.\n"
+        result += (
+            f"\nNo results in context retrieval attempt {attempt_num}, round {round_num}, "
+            f"because no valid functions were requested or all requested functions were invalid/already called.\n"
+        )
     else:
-        result += f"The results of the context retrieval functions have been retrieved in round {current_round_num}:\n\n"
-        # Format only the current round's results (no redundant header)
+        result += f"The following has been retrieved in context retrieval attempt {attempt_num}, round {round_num}:\n"
         for file_path, file_results in current_round_results.items():
             result += f"{file_path}:\n"
             for func_name, func_results in file_results.items():
@@ -467,17 +403,22 @@ def format_current_context(all_retrieval_results: list, reasoning: str, context_
         result += "\n"
     
     # Show remaining available functions per file
-    result += "For each file, the remaining functions are available to call in the next round:\n"
-    # Get the dict mapping file_path -> list of available functions
-    available_functions_dict = context_dict.get_available_functions()  # Returns dict when file_path is None
-    
+    result += format_available_functions(context_dict)
+
+    return result
+
+def format_available_functions(context_dict: ContextDict) -> str:
+    """
+    Format the remaining functions available to be called
+    Helper for format_initial_available_functions and format_current_context
+    """
+    result = "For each file, the following context retrieval functions are available to call in the next round:\n"
+    available_functions_dict = context_dict.get_available_functions()
     for file_path in sorted(available_functions_dict.keys()):
         available_for_file = available_functions_dict[file_path]
         if available_for_file:
             result += f"  - {file_path}: {', '.join(available_for_file)}\n"
-    
     return result
-
 
 ########################################################
 # Helper functions for logging and printing message threads

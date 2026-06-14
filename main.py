@@ -2,7 +2,6 @@ import asyncio
 import os
 import sys
 from autogen_core import AgentId, SingleThreadedAgentRuntime
-from autogen_core.models import SystemMessage
 from autogen_ext.models.openai import OpenAIChatCompletionClient
 
 project_root = os.path.dirname(os.path.abspath(__file__))
@@ -21,7 +20,19 @@ from agents.helpers.agent_helpers import run_patch_test_loop, save_all_message_t
 from agents.data_structures.data_classes import SelectionTask
 from agents.data_structures.dicts import BugDict, ContextDict
 
-from agents.prompt_templates import BASIC_PROMPT, COT_PROMPT, PATTERN_PROMPT, CONTEXT_PROMPT, SELECTION_PROMPT
+# Note: these can be changed, but note that there are some parts of the prompt enclosed by {} which
+# are placeholders for content that will be filled in when the agent is initialized
+# Changing the prompt may break the program if the placeholders can't be correctly populated
+from agents.prompt_templates import (
+    PATCHING_SYSTEM_PROMPT,
+    BASIC_PROMPT,
+    COT_PROMPT,
+    PATTERN_PROMPT,
+    CONTEXT_PROMPT,
+    CONTEXT_RETRIEVAL_PROMPT,
+    SUMMARY_PROMPT,
+    SELECTION_PROMPT,
+)
 
 import time
 
@@ -61,7 +72,7 @@ async def main():
             AgentId("patching", "pattern"),
         ],
         "testing": [AgentId("testing", "testing")],
-        "context": [AgentId("context", "context")],
+        "context_retrieval": [AgentId("context_retrieval", "context_retrieval")],
         "summary": [AgentId("summary", "summary")],
         "selection": [AgentId("selection", "selection")],
     }
@@ -71,9 +82,6 @@ async def main():
         model=os.environ.get("GPT_MODEL", "gpt-4o-mini"),
         api_key=os.environ.get("OPENAI_API_KEY"),
     )
-
-    # Create system messages for each agent type
-    admin_system_message = SystemMessage(content="Admin Agent - Message Log")
 
     # Create BugDict for Closure 3 bug (shared by all patching agents)
     project_name = "Math"
@@ -112,24 +120,15 @@ async def main():
         batch_size=8,
     )
 
-    # TODO: also import role descriptions the way we do prompts
-
-    # Role descriptions for different patching agents
-    role_descriptions = {
-        "basic": "You are a basic patching agent. Generate patches for bugs in Java code.",
-        "cot": "You are a chain-of-thought patching agent. Generate patches for bugs in Java code using step-by-step reasoning.",
-        "context": "You are a context-aware patching agent. Generate patches for bugs in Java code using context information retrieved by the context retrieval agent.",
-        "pattern": "You are a pattern-based patching agent. Generate patches for bugs in Java code using common repair patterns.",
+    agent_prompts = {
+        "basic": BASIC_PROMPT,
+        "cot": COT_PROMPT,
+        "context": CONTEXT_PROMPT,
+        "pattern": PATTERN_PROMPT,
+        "context_retrieval": CONTEXT_RETRIEVAL_PROMPT,
+        "summary": SUMMARY_PROMPT,
+        "selection": SELECTION_PROMPT,
     }
-
-    # Role description for context retrieval agent
-    context_role_description = """You are a context retrieval agent. Your job is to retrieve relevant context information 
-    for bug fixing. You can request context retrieval functions for specific files. Only request functions that are 
-    actually needed to understand and fix the bug."""
-
-    selection_role_description = """You are a patch selection agent. Your job is to select the best candidate patch for a buggy Java program."""
-
-    summary_role_description = """You are a summary agent. Your job is to summarize the context retrieval results."""
 
     # Store reference to AdminAgent and ContextAgent instances so we can access their context later
     admin_agent_instance_ref = None
@@ -137,7 +136,7 @@ async def main():
 
     def admin_agent_factory():
         nonlocal admin_agent_instance_ref
-        admin = AdminAgent(receiver_instances, admin_system_message, context_dict=context_dict, runtime=runtime)
+        admin = AdminAgent(receiver_instances, context_dict=context_dict, runtime=runtime)
         admin_agent_instance_ref = admin
         return admin
 
@@ -147,24 +146,20 @@ async def main():
         context_agent = ContextRetrievalAgent(
             model_client=model_client,
             context_dict=context_dict,
-            role_description=context_role_description,
-            past_summary="",
             bug_dict=bug_dict,
+            patching_system_prompt=PATCHING_SYSTEM_PROMPT,
+            agent_prompts=agent_prompts,
         )
         context_agent_instance_ref = context_agent
         return context_agent
 
     # Register the classes
     await AdminAgent.register(runtime, "admin", admin_agent_factory)
-    await PatchingAgent.register(
-        runtime, "patching", lambda: PatchingAgent(model_client, bug_dict, role_descriptions)
-    )
+    await PatchingAgent.register(runtime, "patching", lambda: PatchingAgent(model_client, bug_dict, agent_prompts))
     await TestingAgent.register(runtime, "testing", lambda: TestingAgent(bug_dict))
-    await ContextRetrievalAgent.register(runtime, "context", context_agent_factory)
-    await SummaryAgent.register(runtime, "summary", lambda: SummaryAgent(model_client, summary_role_description))
-    await SelectionAgent.register(
-        runtime, "selection", lambda: SelectionAgent(model_client, selection_role_description, bug_dict)
-    )
+    await ContextRetrievalAgent.register(runtime, "context_retrieval", context_agent_factory)
+    await SummaryAgent.register(runtime, "summary", lambda: SummaryAgent(model_client, agent_prompts))
+    await SelectionAgent.register(runtime, "selection", lambda: SelectionAgent(model_client, bug_dict, agent_prompts))
 
     runtime.start()
 
@@ -175,10 +170,10 @@ async def main():
         # Run all agents' loops in parallel
         # Note: Context retrieval will be run automatically when the context patching agent needs it
         basic_rounds, cot_rounds, context_rounds, pattern_rounds = await asyncio.gather(
-            run_patch_test_loop("basic", BASIC_PROMPT, admin_agent, runtime, num_rounds=NUM_PATCHING_ROUNDS),
-            run_patch_test_loop("cot", COT_PROMPT, admin_agent, runtime, num_rounds=NUM_PATCHING_ROUNDS),
-            run_patch_test_loop("context", CONTEXT_PROMPT, admin_agent, runtime, num_rounds=NUM_PATCHING_ROUNDS, context_dict=context_dict),
-            run_patch_test_loop("pattern", PATTERN_PROMPT, admin_agent, runtime, num_rounds=NUM_PATCHING_ROUNDS),
+            run_patch_test_loop("basic", admin_agent, runtime, num_rounds=NUM_PATCHING_ROUNDS),
+            run_patch_test_loop("cot", admin_agent, runtime, num_rounds=NUM_PATCHING_ROUNDS),
+            run_patch_test_loop("context", admin_agent, runtime, num_rounds=NUM_PATCHING_ROUNDS, context_dict=context_dict),
+            run_patch_test_loop("pattern", admin_agent, runtime, num_rounds=NUM_PATCHING_ROUNDS),
         )
 
         print(f"\nFinal results:")
@@ -188,7 +183,10 @@ async def main():
         print(f"Pattern agent completed in {pattern_rounds} rounds")
 
         # All loops are done: select the best candidate among all the patches that passed all test suites
-        selection_task = SelectionTask(candidate_patches=PatchingAgent.candidate_patches, message=SELECTION_PROMPT)
+        selection_task = SelectionTask(
+            candidate_patches=PatchingAgent.candidate_patches,
+            message="Select the best candidate patch as described previously.",
+        )
         selection_response = await runtime.send_message(selection_task, recipient=admin_agent)
         print(selection_response.selected_patch_description)
     finally:

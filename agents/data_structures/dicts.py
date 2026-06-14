@@ -163,8 +163,8 @@ class ContextDict:
         
         # Default list of all available functions (used when initializing for a new file)
         # Must match the functions listed in cr_functions.py
-        # Note: similar_lines_of_code and similar_function_name are only available from round 2 onwards
-        self._default_functions = [
+        # Note: similar_lines_of_code and similar_function_name are only available from attempt 2 onwards
+        self.default_functions = [
             "comment_retrieval",
             "all_funcs_in_class",
             "one_hop_api_retrieval",
@@ -179,8 +179,8 @@ class ContextDict:
         - top k callable functions (one-hop APIs, 2-hop APIs, within class)
         '''
         
-        # Functions that are only available from round 2 onwards (require test failure info)
-        self._round2_functions = [
+        # Functions unlocked at the start of context retrieval attempt 2+ (require failing test info)
+        self.attempt2_functions = [
             "similar_lines_of_code",
             "similar_function_name"
         ]
@@ -205,17 +205,20 @@ class ContextDict:
         # Initialize each file with default functions
         for file_path, _, _ in bug_files_and_locations:
             if file_path not in available_functions:
-                available_functions[file_path] = self._default_functions.copy()
+                available_functions[file_path] = self.default_functions.copy()
 
     def get_retrieved_context(self) -> list[str]:
         """Get the list of round summaries"""
         return self.context_dict.get("retrieved context", [])
     
-    def add_retrieved_context_round(self, round_summary: str):
-        """Add a round summary to the retrieved context list (formatted summary string from SummaryAgent)"""
+    def add_retrieved_context_attempt(self, attempt_summary: str):
+        """
+        Add a summary of a context retrieval attempt (NUM_PATCHING_ROUNDS rounds per attempt)
+        to the retrieved context list (formatted summary string from SummaryAgent)
+        """
         if "retrieved context" not in self.context_dict:
             self.context_dict["retrieved context"] = []
-        self.context_dict["retrieved context"].append(round_summary)
+        self.context_dict["retrieved context"].append(attempt_summary)
     
     def get_available_functions(self) -> dict[str, list[str]]:
         """Get dict mapping file_path -> list of available context retrieval functions for all files.
@@ -230,18 +233,19 @@ class ContextDict:
         """Remove a function from available list for a specific file (after it's been used)"""
         available = self.context_dict.get("available context functions", {})
         if file_path not in available:
-            available[file_path] = self._default_functions.copy()
+            available[file_path] = self.default_functions.copy()
         if function_name in available[file_path]:
             available[file_path].remove(function_name)
     
-    def add_round2_functions(self):
+    def add_attempt2_functions(self):
         """
-        Add round 2 functions (similar_lines_of_code, similar_function_name) to all files.
-        Should be called at the start of round 2.
+        Add attempt 2 functions to all files.
+        These functions are more computationally expensive, so we don't make them available until
+        after the first attempt of patching has failed.
         """
         available = self.context_dict.get("available context functions", {})
         for file_path in available.keys():
-            for func in self._round2_functions:
+            for func in self.attempt2_functions:
                 if func not in available[file_path]:
                     available[file_path].append(func)
     

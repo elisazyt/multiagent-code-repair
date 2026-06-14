@@ -49,7 +49,7 @@ class ContextRetrievalTask:
 # send this response to the summary agent? this agent will format the context nicely into a string
 class ContextRetrievalResponse:
     # Attempt number (e.g., 1, 2, 3) - used by SummaryAgent to label the summary
-    retrieval_attempt: int  # Actually represents attempt number, not round number
+    retrieval_attempt: int  # Note: Represents attempt number, NOT round number
     # function_results is the formatted string of all rounds' context retrieval results for this attempt
     # Contains reasoning and results for each round (from format_current_context)
     function_results: str
