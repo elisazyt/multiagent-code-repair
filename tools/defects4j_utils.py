@@ -5,6 +5,7 @@ Helper functions for running Defects4J commands
 import os
 import subprocess
 
+
 def checkout_defects4j_project(project_name: str, bug_id: str, checkout_dir: str) -> bool:
     """Checkout the buggy version of a Defects4J project.
     Can specify any arbirary checkout_dir, for this project we always checkout to the reference directory
@@ -18,7 +19,6 @@ def checkout_defects4j_project(project_name: str, bug_id: str, checkout_dir: str
     - bool: True if checkout succeeded or already exists, False otherwise
     """
     try:
-        print(f"Checking out Defects4J project {project_name} {bug_id} to {checkout_dir}...")
         result = subprocess.run(
             ['defects4j', 'checkout', '-p', project_name, '-v', bug_id + 'b', '-w', checkout_dir],
             capture_output=True,
@@ -27,21 +27,15 @@ def checkout_defects4j_project(project_name: str, bug_id: str, checkout_dir: str
         )
 
         if result.returncode == 0:
-            print(f"✓ Checked out to {checkout_dir}")
             return True
         else:
-            print(f"Failed to checkout project: {result.stderr}")
             return False
             
     except Exception as e:
-        print(f"Error during checkout: {e}")
+        print(f"[ERROR] checkout_defects4j_project hit an exception: {e}")
         return False
 
-# Note: get_modified_sources is different from get_modified_source, defined in bugdict_helpers.py
-# get_modified_source is used to get the modified source name for a single Java file, if we care about 
-# which modified source name maps to which file. This is a helper for BugDict.add_bug_locations
-# get_modified_sources is used to get all modified sources for a buggy project. This is a helper
-# for test_suites.run_defects4j_test
+
 def get_modified_sources(project_name: str, bug_id: str) -> list[str]:
     """
     Get the list of all modified sources for a specific bug.
@@ -63,7 +57,7 @@ def get_modified_sources(project_name: str, bug_id: str) -> list[str]:
         )
 
         if result.returncode != 0:
-            print(f"Failed to get modified sources: {result.stderr}")
+            print(f"[ERROR] get_modified_sources: Failed to run command to get modified sources: {result.stderr}")
             return []
 
         # result is a string of the form: bug id,"class1;class2;class3..."
@@ -81,10 +75,10 @@ def get_modified_sources(project_name: str, bug_id: str) -> list[str]:
             return [source.strip() for source in classes.split(';') if source.strip()]
         return []
     except Exception as e:
-        print(f"Error getting modified sources: {e}")
+        print(f"[ERROR] get_modified_sources hit an exception: {e}")
         return []
 
-# All Defects4J commands run in Java 11
+
 def get_java11_env():
     """
     Get environment with Java 11 for Defects4J.

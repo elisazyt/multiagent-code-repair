@@ -1,6 +1,7 @@
 import os
 import shutil
 
+
 def extract_markdown_blocks(agent_response) -> list[str]:
     '''
     Extract the markdown blocks from the agent response. Each element in the list corresponds to
@@ -84,7 +85,7 @@ def apply_all_patches(
         unique_node_locations_per_file: List[List[Tuple[int, int]]] - pre-computed unique node locations per file
                                         Each inner list contains sorted (start_line, end_line) tuples for that file
         generated_patches_dir: Directory for storing generated patches
-        patching_attempt: Round number appended to filename
+        patching_attempt: Patching attempt number appended to filename
     
     Returns:
         dict[str, tuple[str, list[str]]]: Mapping from modified_source_name to a tuple containing:
@@ -94,18 +95,12 @@ def apply_all_patches(
     fixed_code_blocks = extract_markdown_blocks(agent_response)
 
     if not bug_files_and_locations or not fixed_code_blocks:
-        if bug_files_and_locations and not fixed_code_blocks:
-            print("[ERROR] Patch response contained no ```java code blocks.")
         return {}
     
     # Count unique nodes per file from the pre-computed locations
     unique_nodes_per_file = [len(locations) for locations in unique_node_locations_per_file]
     expected_blocks = sum(unique_nodes_per_file)
     if len(fixed_code_blocks) != expected_blocks:
-        print(
-            f"[ERROR] Expected {expected_blocks} ```java code blocks (one per unique buggy node) "
-            f"but found {len(fixed_code_blocks)}."
-        )
         return {}
     
     # Split fixed_code_blocks based on unique nodes per file
@@ -121,22 +116,14 @@ def apply_all_patches(
     # Process each file
     # Structure: (file_path, modified_source_name, bug_locations_list)
     for i, (java_file_path, modified_source_name, bug_locations_list) in enumerate(bug_files_and_locations):
-        print(f"[DEBUG] Processing file: {java_file_path} for source: {modified_source_name}")
         
         # Use pre-computed node locations
         buggy_node_locations = unique_node_locations_per_file[i]
-        print(f"[DEBUG] Bug locations: {bug_locations_list}")
-        print(f"[DEBUG] Unique buggy node locations (start,end): {buggy_node_locations}")
         
         if not buggy_node_locations:
             continue
         
         if len(buggy_node_locations) != len(fixed_code_blocks_per_file[i]):
-            print(
-                f"[ERROR] Mismatch for {java_file_path}: {len(buggy_node_locations)} unique buggy nodes "
-                f"but {len(fixed_code_blocks_per_file[i])} code blocks. "
-                f"Provide one ```java block per unique buggy node."
-            )
             return {}
 
         class_name = modified_source_name.rsplit(".", 1)[-1]
@@ -151,8 +138,6 @@ def apply_all_patches(
         # Apply patches in reverse order (from highest line numbers to lowest)
         for j in range(num_patches - 1, -1, -1):
             # Get patched content
-            block_preview = " ".join(fixed_code_blocks_per_file[i][j].splitlines()[:2])
-            print(f"[DEBUG] Applying patch index {j} to lines {buggy_node_locations[j]} with block preview: {block_preview}")
             patched_content = replace_buggy_node(patched_file_path, buggy_node_locations[j], fixed_code_blocks_per_file[i][j])
             
             # Write it back to the file

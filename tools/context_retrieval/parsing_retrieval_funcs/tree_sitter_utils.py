@@ -10,7 +10,7 @@ JAVA_LANGUAGE = Language(tree_sitter_java.language())
 
 parser = Parser(JAVA_LANGUAGE)
 
-# Extract text from a tree-sitter node
+
 def get_node_text(node: Node, code: bytes) -> str:
     """
     Extract text from a tree-sitter node using the provided code bytes
@@ -18,7 +18,6 @@ def get_node_text(node: Node, code: bytes) -> str:
     return code[node.start_byte:node.end_byte].decode("utf8")
 
 
-# This retrieves the buggy code for all buggy files
 def retrieve_code_by_line_number(java_file_path: str, bug_location: Tuple[int, int]) -> str:
     """
     Retrieve the exact code corresponding to the buggy lines of code
@@ -36,7 +35,6 @@ def retrieve_code_by_line_number(java_file_path: str, bug_location: Tuple[int, i
         
         # Validate line numbers
         if start_idx < 0 or end_idx > len(lines) or start_idx >= end_idx:
-            print(f"Warning: Invalid line range ({start_line}, {end_line}) for file with {len(lines)} lines")
             return ""
         
         # Extract the buggy lines of code (inclusive)
@@ -44,18 +42,10 @@ def retrieve_code_by_line_number(java_file_path: str, bug_location: Tuple[int, i
         buggy_code = ''.join(bug_lines)
         
         return buggy_code
-        
-    except FileNotFoundError:
-        print(f"Error: File {java_file_path} not found")
-        return ""
     except Exception as e:
-        print(f"Error reading file {java_file_path}: {e}")
+        print(f"[ERROR] retrieve_code_by_line_number hit an exception: {e}")
         return ""
 
-
-########################################################################################
-# FUNCTIONS FOR RETRIEVING BUG LOCATIONS AND NODES
-########################################################################################
 
 def retrieve_buggy_lines_and_node(java_file_path: str, bug_locations: List[Tuple[int, int]]) -> List[Tuple[Tuple[int, int], str, Tuple[Tuple[int, int], Node]]]:
     """
@@ -73,7 +63,7 @@ def retrieve_buggy_lines_and_node(java_file_path: str, bug_locations: List[Tuple
         result.append((bug_location, buggy_lines, buggy_node))
     return result
 
-# TODO: further narrow down what's provided in retrieve_buggy_class. no need to provide all method bodies
+
 def retrieve_buggy_node(java_file_path: str, bug_location: Tuple[int, int]) -> Tuple[Tuple[int, int], Node]:
     """
     Retrieve the node that contains the buggy lines of code (either method, constructor, class, or None)
@@ -97,26 +87,17 @@ def retrieve_buggy_node(java_file_path: str, bug_location: Tuple[int, int]) -> T
             node_start_line = buggy_class_node.start_point[0] + 1
             node_end_line = buggy_class_node.end_point[0] + 1
             return ((node_start_line, node_end_line), buggy_class_node)
-        # TODO: figure out how to exclude irrelevant context
         
         # If not in class, it's most likely related to API importation, global variables, etc. Return None
         return None
-
-    except FileNotFoundError:
-        print(f"Error: File {java_file_path} not found")
-        return None
     except Exception as e:
-        print(f"Error reading file {java_file_path}: {e}")
+        print(f"[ERROR] retrieve_buggy_node hit an exception: {e}")
         return None
 
-
-########################################################################################
-# FUNCTIONS FOR PROCESSING METHODS AND CONSTRUCTORS
-########################################################################################
 
 def retrieve_buggy_method_or_constructor(java_file_path: str, bug_location: Tuple[int, int]) -> Node:
     """
-    HELPER FOR retrieve_buggy_node
+    Helper for retrieve_buggy_node
     Retrieve the method declaration node that contains the buggy lines of code.
     Assumes the start and end line both fall within the range of a method_declaration node.
     """
@@ -151,12 +132,8 @@ def retrieve_buggy_method_or_constructor(java_file_path: str, bug_location: Tupl
                     return node
         
         return None
-        
-    except FileNotFoundError:
-        print(f"Error: File {java_file_path} not found")
-        return None
     except Exception as e:
-        print(f"Error reading file {java_file_path}: {e}")
+        print(f"[ERROR] retrieve_buggy_method_or_constructor hit an exception: {e}")
         return None
 
 
@@ -193,15 +170,10 @@ def retrieve_method_node_by_name(java_file_path: str, method_name: str) -> Node:
             return None
 
         return find_method(tree.root_node)
-        
     except Exception as e:
-        print(f"Error retrieving method by name: {e}")
+        print(f"[ERROR] retrieve_method_node_by_name hit an exception: {e}")
         return None
 
-
-########################################################################################
-# FUNCTIONS FOR PROCESSING CLASSES
-########################################################################################
 
 def retrieve_buggy_class(java_file_path: str, bug_location: Tuple[int, int]) -> Node:
     """
@@ -250,12 +222,9 @@ def retrieve_buggy_class(java_file_path: str, bug_location: Tuple[int, int]) -> 
             return outermost_class[0]  # Return the node, not the tuple
         
         return None
-        
-    except FileNotFoundError:
-        print(f"Error: File {java_file_path} not found")
-        return None
+
     except Exception as e:
-        print(f"Error reading file {java_file_path}: {e}")
+        print(f"[ERROR] retrieve_buggy_class hit an exception: {e}")
         return None
 
 
@@ -310,7 +279,7 @@ def extract_class_name_from_node(class_node: Node, java_file_path: str) -> str:
                 return get_node_text(child, code)
         
         return None
-        
+
     except Exception as e:
-        print(f"Error extracting class name: {e}")
+        print(f"[ERROR] extract_class_name_from_node hit an exception: {e}")
         return None

@@ -20,6 +20,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = UniXcoder("microsoft/unixcoder-base")
 model.to(device)
 
+
 def get_top_k_code_snippets(k: int, query_embedding: torch.Tensor, code_embeddings: List[torch.Tensor], java_file_path: str, line_ranges: List[Tuple[int, int]]) -> List[str]:
     """
     Get the top k code snippets based on cosine similarity to the query embedding.
@@ -52,6 +53,7 @@ def get_top_k_code_snippets(k: int, query_embedding: torch.Tensor, code_embeddin
         top_k_code_snippets.append(code)
     
     return top_k_code_snippets
+
 
 def embed_code_snippets(method_bodies: List[Tuple[str, Tuple[int, int]]], window_size: int, batch_size: int) -> Tuple[List[torch.Tensor], List[Tuple[int, int]]]:
     """
@@ -98,6 +100,7 @@ def embed_code_snippets(method_bodies: List[Tuple[str, Tuple[int, int]]], window
             all_embeddings.append(batch_emb[i])  # [768]
     
     return all_embeddings, line_ranges
+
 
 def embed_bug_location(java_file_path: str, bug_location: Tuple[int, int]) -> torch.Tensor:
     """
@@ -146,10 +149,12 @@ def embed_bug_location(java_file_path: str, bug_location: Tuple[int, int]) -> to
     all_chunks = torch.stack(chunk_embeddings, dim=0)  # [num_chunks, 768]
     return torch.mean(all_chunks, dim=0)  # [768]
 
+
 def compute_cosine_similarity(embedding1: torch.Tensor, embedding2: torch.Tensor) -> torch.Tensor:
     norm_embedding1 = torch.nn.functional.normalize(embedding1, p=2, dim=1)
     norm_embedding2 = torch.nn.functional.normalize(embedding2, p=2, dim=1)
     return torch.einsum("ac,bc->ab", norm_embedding1, norm_embedding2)
+
 
 def get_sliding_windows(method_body: str, body_start_line: int, window_size: int) -> List[Tuple[str, Tuple[int, int]]]:
     """

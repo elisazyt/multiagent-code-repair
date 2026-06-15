@@ -1,6 +1,7 @@
 from typing import List, Dict
 import re
 
+
 def build_signatures(signatures_list: List[str]) -> Dict[str, str]:
     """
     Builds a dictionary of documents from a given repository directory and commit.
@@ -19,6 +20,7 @@ def build_signatures(signatures_list: List[str]) -> Dict[str, str]:
         split_str = split_words(stripped)
         signatures[signature] = split_str
     return signatures
+
 
 def build_query(failing_test_list: list[dict[str, str]], buggy_func_signature: str, class_name: str) -> str:
     """
@@ -40,6 +42,7 @@ def build_query(failing_test_list: list[dict[str, str]], buggy_func_signature: s
     query = split_words(query)
     return query
 
+
 def strip_characters(original_str: str) -> str:
     '''
     Replace special characters with spaces: ()[]{}<>,:;/
@@ -51,6 +54,7 @@ def strip_characters(original_str: str) -> str:
     import re
     stripped = re.sub(r'\s+', ' ', stripped).strip()
     return stripped
+
 
 def split_words(stripped_str: str) -> str:
     '''

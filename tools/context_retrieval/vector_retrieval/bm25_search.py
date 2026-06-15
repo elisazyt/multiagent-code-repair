@@ -5,11 +5,12 @@ import subprocess
 from typing import Any, List, Dict
 from pyserini.search.lucene import LuceneSearcher
 
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+parent_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 from agents.data_structures.dicts import BugDict, ContextDict
 from . import bm25_utils as utils
+
 
 def make_index(signatures_list: List[str], bug_dict: BugDict, context_dict: ContextDict):
     """
@@ -19,7 +20,7 @@ def make_index(signatures_list: List[str], bug_dict: BugDict, context_dict: Cont
         signatures_list: List[str], obtained by calling full_signatures_in_buggy_class
         bug_dict: BugDict - For project name, bug id
         context_dict: ContextDict - For BM25 directories (jsonl_dir, index_dir)
-    
+
     Returns:
         str: Path to the created index directory
     """
@@ -44,7 +45,6 @@ def make_index(signatures_list: List[str], bug_dict: BugDict, context_dict: Cont
 
     # Reuse existing index if it exists
     if os.path.exists(jsonl_file_path):
-        print("Index already exists, returning existing index")
         return index_subdir
     os.makedirs(index_subdir, exist_ok=True)
 
@@ -100,7 +100,6 @@ def search(k: int, failing_test_list: list[dict[str, str]], buggy_func_signature
     try:
         searcher = LuceneSearcher(index_subdir)
         query = utils.build_query(failing_test_list, buggy_func_signature, class_name=class_name)
-        print(f"Query: {query}")
         cutoff = len(query)
         while True:
             try:
@@ -123,7 +122,5 @@ def search(k: int, failing_test_list: list[dict[str, str]], buggy_func_signature
             results.append(hit.docid)
         return results
     except Exception as e:
-        print(f"Failed to process query: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"[ERROR] search hit an exception: {e}")
         return None

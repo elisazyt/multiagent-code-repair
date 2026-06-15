@@ -1,32 +1,3 @@
-import os
-
-def get_buggy_file_path(
-    reference_checkout_path: str,
-    project_name: str,
-    java_relative_path: str,
-) -> str:
-    """
-    Given a relative Java path, return the absolute path to the buggy file
-    Concatenate the defects4j checkout path, the project prefix, and the relative path
-    """
-    prefix = get_project_prefix(project_name)
-    relative_path = java_relative_path.lstrip("/")
-    return os.path.join(reference_checkout_path, prefix, relative_path)
-
-def get_project_prefix(project_name: str) -> str:
-    """
-    Get the connecting prefix for a given project
-    """
-    prefixes = {
-        "chart": "source",
-        "closure": "src",
-        "mockito": "src",
-        "math": "src/main/java",
-        "lang": "src/main/java",
-        "time": "src/main/java",
-    }
-    return prefixes[project_name.lower()]
-
 def get_modified_source(java_file_path: str) -> str:
     """
     Helper for add_bug_locations

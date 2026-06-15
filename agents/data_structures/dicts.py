@@ -23,6 +23,7 @@ class BugDict:
     During runtime, when creating the prompt:
     - Unique node locations per file (list of lists of tuples)
     """
+
     def __init__(self):
         self.info_dict = {}
 
@@ -38,32 +39,22 @@ class BugDict:
         bug_locations: List[Tuple[str, List[Tuple[int, int]]]],
     ):
         """
-        - Bug locations are a list of tuples, each containing a file path (relative to the source folder)
-        and a list of line numbers. Line numbers are tuples of (start, end) line numbers.
-        - We store the complete path to each bug location, the modified source name, and the list of line numbers.
+        - Bug locations are a list of tuples, each containing a path to a Java file (relative to
+          the Defects4J reference checkout) and a list of line ranges.
+        - We store the absolute file path, the modified source name, and the list of line numbers.
         """
-        # Get the full path to the buggy file
-        updated_bug_locations = []
-        for relative_path, bug_locations_list in bug_locations:
-            absolute_path = helpers.get_buggy_file_path(
-                self.get_info("defects4j reference checkout path"),
-                self.get_info("project name"),
-                relative_path,
-            )
-            updated_bug_locations.append((absolute_path, bug_locations_list))
-
-        # Enrich bug_locations with modified_source_name
-        # New structure: List[Tuple[str, str, List[Tuple[int, int]]]]
-        #                 (absolute_file_path, modified_source_name, bug_locations_list)
         enriched_bug_locations = []
-        for java_file_path, bug_locations_list in updated_bug_locations:
-            modified_source_name = helpers.get_modified_source(java_file_path)
+        for java_file_path, bug_locations_list in bug_locations:
+            # get the absolute path to the Java file
+            reference_checkout_path = self.get_info("defects4j reference checkout path")
+            absolute_file_path = os.path.abspath(os.path.join(reference_checkout_path, java_file_path))
+            modified_source_name = helpers.get_modified_source(absolute_file_path)
             if modified_source_name:
-                enriched_bug_locations.append((java_file_path, modified_source_name, bug_locations_list))
+                enriched_bug_locations.append((absolute_file_path, modified_source_name, bug_locations_list))
             else:
-                # Fallback: use filename if extraction fails
-                filename = os.path.basename(java_file_path).replace('.java', '')
-                enriched_bug_locations.append((java_file_path, filename, bug_locations_list))
+                # Fallback: use filename if extraction fails, we should ideally never reach this point
+                filename = os.path.basename(absolute_file_path).replace('.java', '')
+                enriched_bug_locations.append((absolute_file_path, filename, bug_locations_list))
 
         self.add_info("bug files and locations", enriched_bug_locations)
 
@@ -154,6 +145,7 @@ class ContextDict:
     - Available context functions (for each file, a list of context retrieval functions available to call)
     - Test info (list of failing-test dicts for BM25)
     """
+
     def __init__(self, bug_dict: BugDict = None):
         self.context_dict = {
             "retrieved context": [], # List of retrieval summaries, one per patching attempt
@@ -162,7 +154,7 @@ class ContextDict:
         }
         
         # Default list of all available functions (used when initializing for a new file)
-        # Must match the functions listed in cr_functions.py
+        # Must match the functions listed in context_retrieval_functions.py
         # Note: similar_lines_of_code and similar_function_name are only available from attempt 2 onwards
         self.default_functions = [
             "comment_retrieval",
@@ -186,7 +178,7 @@ class ContextDict:
         ]
 
         self.initialize_from_bug_dict(bug_dict)
-    
+
     def initialize_from_bug_dict(self, bug_dict: BugDict = None):
         """Initialize available functions dict with file paths from BugDict.
         
@@ -208,9 +200,9 @@ class ContextDict:
                 available_functions[file_path] = self.default_functions.copy()
 
     def get_retrieved_context(self) -> list[str]:
-        """Get the list of round summaries"""
+        """Get the list of summaries for all rounds of context retrieval"""
         return self.context_dict.get("retrieved context", [])
-    
+
     def add_retrieved_context_attempt(self, attempt_summary: str):
         """
         Add a summary of a context retrieval attempt (NUM_PATCHING_ROUNDS rounds per attempt)
@@ -219,7 +211,7 @@ class ContextDict:
         if "retrieved context" not in self.context_dict:
             self.context_dict["retrieved context"] = []
         self.context_dict["retrieved context"].append(attempt_summary)
-    
+
     def get_available_functions(self) -> dict[str, list[str]]:
         """Get dict mapping file_path -> list of available context retrieval functions for all files.
         
@@ -228,7 +220,7 @@ class ContextDict:
         """
         available = self.context_dict.get("available context functions", {})
         return available.copy() if available else {}
-    
+
     def remove_function(self, function_name: str, file_path: str):
         """Remove a function from available list for a specific file (after it's been used)"""
         available = self.context_dict.get("available context functions", {})
@@ -236,7 +228,7 @@ class ContextDict:
             available[file_path] = self.default_functions.copy()
         if function_name in available[file_path]:
             available[file_path].remove(function_name)
-    
+
     def add_attempt2_functions(self):
         """
         Add attempt 2 functions to all files.
@@ -248,13 +240,13 @@ class ContextDict:
             for func in self.attempt2_functions:
                 if func not in available[file_path]:
                     available[file_path].append(func)
-    
+
     def get_info(self, info_type):
         return self.context_dict[info_type]
-    
+
     def add_info(self, info_type, info):
         self.context_dict[info_type] = info
-    
+
     def add_bm25_rag_config(self, k_signatures: int, jsonl_dir, index_dir, k_code_snippets: int, window_size: int, batch_size: int):
         """Add BM25 RAG configuration to ContextDict"""
         # BM25 configs

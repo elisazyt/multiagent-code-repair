@@ -4,8 +4,8 @@ This file only contains the function schema definition
 The actual ContextRetrievalAgent implementation is in agents.py
 """
 
-def create_context_retrieval_function():
-    """Create the function schema for OpenAI function calling"""
+
+def create_function_call_schema():
     return {
         "name": "request_context",
         "description": "Request context retrieval for specific files and functions",

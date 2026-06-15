@@ -1,9 +1,6 @@
 import os
 import shutil
 
-########################
-# HELPER FUNCTIONS FOR RUN_DEFECTS4J_TEST
-########################
 
 def reset_checkout(reference_dir: str, agent_checkout_dir: str) -> bool:
     """
@@ -21,18 +18,18 @@ def reset_checkout(reference_dir: str, agent_checkout_dir: str) -> bool:
         shutil.rmtree(agent_checkout_dir)
     # Replace with copy of the reference checkout
     shutil.copytree(reference_dir, agent_checkout_dir)
-    print(f"Reset checkout at {agent_checkout_dir}")
     return True
 
-# Replace a buggy file (target_file_path) with the patched program (java_file)
+
 def apply_java_file_patch(java_file: str, target_file_path: str):
     try:
         # Copy the Java file to the target location
         shutil.copy2(java_file, target_file_path)
         return True
     except Exception as e:
-        print(f"Error applying Java file patch: {e}")
+        print(f"[ERROR] apply_java_file_patch hit an exception: {e}")
         return False
+
 
 def get_full_source_path(project_name: str, working_dir: str, modified_source: str):
     """
@@ -60,10 +57,6 @@ def get_full_source_path(project_name: str, working_dir: str, modified_source: s
     full_source_path = connect_paths(project_name, working_dir, paths, modified_source)
     return full_source_path
 
-
-########################
-# HELPER FUNCTIONS FOR GET_FAILING_TEST_INFO
-########################
 
 def get_each_failing_test_info(failing_tests: list[str], failing_tests_info: str) -> dict[str, str]:
     info_for_each_test = {}
@@ -206,9 +199,6 @@ def mark_failing_line_in_method(method_code: str, failing_line_number: int, meth
     return '\n'.join(result_lines)
 
 
-########################
-# Helper function for get_full_source_path and get_full_test_path
-########################
 def connect_paths(project_name: str, working_dir: str, paths: dict[str, str], package_path: str):
     """
     Parameters:

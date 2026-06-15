@@ -2,6 +2,8 @@ from dataclasses import dataclass
 
 
 @dataclass
+
+
 class PatchingTask:
     # patcher_id is the id of the agent that will generate the patch (i.e., "basic", "cot", "context")
     patcher_id: str
@@ -13,6 +15,8 @@ class PatchingTask:
     patching_attempt: int = 1
 
 @dataclass
+
+
 class PatchingResponse:
     # patcher_id is the id of the agent that generated the patch
     patcher_id: str
@@ -22,6 +26,8 @@ class PatchingResponse:
     mapping: dict[str, tuple[str, list[str]]]
 
 @dataclass
+
+
 class TestingTask:
     # patcher_id is the id of the PatchingAgent whose patch is being tested (i.e., "basic", "cot")
     patcher_id: str
@@ -29,6 +35,8 @@ class TestingTask:
     mapping: dict[str, tuple[str, list[str]]]
 
 @dataclass
+
+
 class TestingResponse:
     # patcher_id is the id of the PatchingAgent whose patch was tested (i.e., "basic", "cot")
     patcher_id: str
@@ -40,13 +48,16 @@ class TestingResponse:
     list_result: list[dict[str, str]]
 
 @dataclass
+
+
 class ContextRetrievalTask:
     # Attempt number (e.g., 1, 2, 3) - each attempt consists of up to 3 rounds internally
     # Used by SummaryAgent to label the summary
     retrieval_attempt: int  # Actually represents attempt number, not round number
 
 @dataclass
-# send this response to the summary agent? this agent will format the context nicely into a string
+
+
 class ContextRetrievalResponse:
     # Attempt number (e.g., 1, 2, 3) - used by SummaryAgent to label the summary
     retrieval_attempt: int  # Note: Represents attempt number, NOT round number
@@ -55,6 +66,8 @@ class ContextRetrievalResponse:
     function_results: str
 
 @dataclass
+
+
 class SelectionTask:
     """Task for SelectionAgent to select the best candidate patch from the candidate patches directory."""
     # List of candidate patches
@@ -62,11 +75,15 @@ class SelectionTask:
     # note: we don't have a message here because the prompt is hardcoded in SelectionAgent
 
 @dataclass
+
+
 class SelectionResponse:
     """Response from SelectionAgent with the best candidate patch, formatted as a string."""
     selected_patch_description: str
 
 @dataclass
+
+
 class SummaryTask:
     """Task for SummaryAgent to summarize context retrieval results."""
     # Formatted string containing all rounds' results and reasoning for this attempt
@@ -78,16 +95,20 @@ class SummaryTask:
     message: str
 
 @dataclass
+
+
 class SummaryResponse:
     """Response from SummaryAgent with formatted summary."""
     summary: str  # Formatted summary string
 
 @dataclass
+
+
 class FunctionCall:
     """FunctionCall object returned by LLM when it decides to call a function."""
     name: str
     arguments: dict | str = ""  # Can be dict (for testing) or JSON string (from API)
-    
+
     def get_arguments_dict(self) -> dict:
         """Get arguments as a dict, parsing JSON string if needed."""
         import json

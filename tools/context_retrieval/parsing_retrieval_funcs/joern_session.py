@@ -9,16 +9,12 @@ if PROJECT_ROOT not in sys.path:
 from tools import defects4j_utils as d4j_utils
 
 
-# TODO: improve CFG by providing list of nodes and edges and consider more than 1-hop distance. additionally,
-# consider cases where the bug location is not a method.
-
-
 class JoernSession:
     """
     Simple Joern session manager that loads CPG and runs queries in separate processes.
     This is more reliable than trying to maintain an interactive session.
     """
-    
+
     def __init__(
         self,
         joern_executable: str,
@@ -53,14 +49,9 @@ class JoernSession:
             True if successful, False otherwise
         """
         try:
-            # Set project name for CPG
-            cpg_project_name = f"{project_name}{bug_id}"
-            self.project_name = cpg_project_name
-            
             # Homebrew: javasrc2cpg lives next to joern in joern_working_dir
             javasrc2cpg_path = os.path.join(self.joern_working_dir, "javasrc2cpg")
             if not os.path.exists(javasrc2cpg_path):
-                print(f"ERROR: javasrc2cpg not found at {javasrc2cpg_path}")
                 return False
             
             # Checkout Defects4J project (will skip if already exists)
@@ -68,11 +59,10 @@ class JoernSession:
                 project_name, bug_id, reference_checkout_dir
             )
             if not success:
-                print(f"ERROR: Failed to checkout Defects4J project")
+                print(f"[ERROR] create_cpg_from_defects4j: Failed to checkout Defects4J project")
                 return False
             
             # Export classpath from Defects4J project
-            print("Exporting classpath...")
             cp_result = subprocess.run(
                 ['defects4j', 'export', '-p', 'cp.compile'],
                 cwd=reference_checkout_dir,
@@ -82,11 +72,13 @@ class JoernSession:
             )
             
             if cp_result.returncode != 0:
-                print(f"Failed to export classpath: {cp_result.stderr}")
+                print(f"[ERROR] create_cpg_from_defects4j: Failed to export classpath: {cp_result.stderr}")
                 return False
             
             classpath = cp_result.stdout.strip()
-            print(f"✓ Classpath: {classpath[:100]}...")  # Print first 100 chars
+            if not classpath:
+                print(f"[ERROR] create_cpg_from_defects4j: Empty classpath returned from Defects4J")
+                return False
             
             # Create output directory
             os.makedirs(self.joern_workspace_path, exist_ok=True)
@@ -94,14 +86,9 @@ class JoernSession:
             
             # Check if CPG already exists
             if os.path.exists(output_path):
-                print(f"CPG already exists at {output_path}, skipping creation")
                 return True
             
-            # Run javasrc2cpg
-            print(f"Creating CPG using javasrc2cpg...")
-            print(f"  Input: {reference_checkout_dir}")
-            print(f"  Output: {output_path}")
-            
+            # Run javasrc2cpg         
             javasrc2cpg_cmd = [
                 javasrc2cpg_path,
                 reference_checkout_dir,
@@ -117,20 +104,13 @@ class JoernSession:
             )
             
             if result.returncode != 0:
-                print(f"Error creating CPG with javasrc2cpg:")
-                print(f"  stdout: {result.stdout}")
-                print(f"  stderr: {result.stderr}")
+                print(f"[ERROR] create_cpg_from_defects4j: Error creating CPG with javasrc2cpg: {result.stderr}")
                 return False
-            
-            print(f"✓ CPG created successfully at {output_path}")
             return True
             
         except Exception as e:
-            print(f"Error creating CPG from Defects4J: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"[ERROR] create_cpg_from_defects4j hit an exception: {e}")
             return False
-
 
     def load_cpg(self, project_name: str) -> bool:
         """
@@ -142,24 +122,18 @@ class JoernSession:
         Returns:
             True if successful, False otherwise
         """
-        try:
-            # Construct the path to the CPG file
-            cpg_path = os.path.join(self.joern_workspace_path, "cpg.bin.zip")
-            
-            # Check if the CPG file exists
-            if not os.path.exists(cpg_path):
-                print(f"CPG file not found: {cpg_path}")
-                return False
-            
-            self.project_name = project_name
-            return True
-            
-        except Exception as e:
-            print(f"Error setting CPG path: {e}")
+        # Construct the path to the CPG file
+        cpg_path = os.path.join(self.joern_workspace_path, "cpg.bin.zip")
+        
+        # Check if the CPG file exists
+        if not os.path.exists(cpg_path):
+            print(f"[ERROR] load_cpg: CPG file not found: {cpg_path}")
             return False
-    
+        
+        self.project_name = project_name
+        return True
 
-    def _run_joern_query(self, query: str) -> Tuple[Optional[str], str]:
+    def run_joern_query(self, query: str) -> Tuple[Optional[str], str]:
         """
         Helper method to run a Joern query with CPG loading.
         
@@ -205,11 +179,11 @@ class JoernSession:
             stdout, stderr = process.communicate(input=commands)
             
             if process.returncode != 0:
-                print(f"Error running query: {stderr}")
+                print(f"[ERROR] run_joern_query: Command failed with error: {stderr}")
                 return None, stderr
                 
             return stdout, stderr
-            
+
         except Exception as e:
-            print(f"Error running query: {e}")
+            print(f"[ERROR] run_joern_query hit an exception: {e}")
             return None, str(e)

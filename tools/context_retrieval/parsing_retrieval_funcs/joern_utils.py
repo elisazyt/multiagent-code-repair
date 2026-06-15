@@ -86,11 +86,6 @@ def parse_joern_json_with_unescaped_quotes(json_str: str) -> Optional[list]:
     return results if results else None
 
 
-########################################################################################
-# HELPER FUNCTIONS FOR RETRIEVING METHOD SIGNATURES AND BODIES
-########################################################################################
-
-# Example: org.jfree.data.general.DatasetUtilities.iterateDomainBounds:org.jfree.data.Range(org.jfree.data.xy.XYDataset,boolean)
 def get_full_method_signature_from_line_numbers(session: JoernSession, java_file_path: str, line_numbers: Tuple[int, int], class_name: str) -> Optional[str]:
     """
     Helper for: top_k_class_signatures, get_function_callers
@@ -113,7 +108,7 @@ def get_full_method_signature_from_line_numbers(session: JoernSession, java_file
     # Filter by class name in file path
     query = f'cpg.method.filter(m => m.lineNumber.isDefined && m.lineNumber.get <= {start_line} && m.lineNumberEnd.isDefined && m.lineNumberEnd.get >= {end_line} && m.name != "<clinit>" && m.file.name.filter(_.endsWith("{class_name}.java")).nonEmpty).map(m => (m.fullName)).toJson'
     
-    stdout, _ = session._run_joern_query(query)
+    stdout, _ = session.run_joern_query(query)
     if not stdout:
         return None
     
@@ -153,13 +148,8 @@ def get_full_method_signature_from_line_numbers(session: JoernSession, java_file
             return data[0]
         
         return None
-        
-    except json.JSONDecodeError as e:
-        print(f"Error parsing JSON: {e}")
-        print(f"JSON string that failed: {json_str}")
-        return None
     except Exception as e:
-        print(f"Error processing output: {e}")
+        print(f"[ERROR] get_full_method_signature_from_line_numbers hit an exception: {e}")
         return None
 
 
@@ -188,9 +178,7 @@ def get_method_bodies_from_signatures_batch(session: JoernSession, java_file_pat
     signature_list_str = ', '.join([f'"{sig}"' for sig in full_signatures])
     query = f'cpg.method.filter(m => List({signature_list_str}).contains(m.fullName)).map(m => (m.fullName, m.lineNumber.get, m.lineNumberEnd.get)).toJson'
     
-    stdout, stderr = session._run_joern_query(query)
-    if stderr and not any(harmless in stderr for harmless in ['sun.misc.Unsafe', 'scala.runtime.LazyVals', 'java.lang.System::load']):
-        print(f"DEBUG get_method_bodies_from_signatures_batch stderr: {stderr}")
+    stdout, _ = session.run_joern_query(query)
     if not stdout:
         return [("", (0, 0))] * len(full_signatures)
     
@@ -220,12 +208,8 @@ def get_method_bodies_from_signatures_batch(session: JoernSession, java_file_pat
             data = json.loads(data)
         
         # Step 2: Read file once for all methods
-        try:
-            with open(java_file_path, 'rb') as f:
-                code = f.read()
-        except Exception as e:
-            print(f"Error reading file {java_file_path}: {e}")
-            return [("", (0, 0))] * len(full_signatures)
+        with open(java_file_path, 'rb') as f:
+            code = f.read()
         
         # Step 3: Create a mapping from signature to line range
         signature_to_range = {}
@@ -273,15 +257,9 @@ def get_method_bodies_from_signatures_batch(session: JoernSession, java_file_pat
         return result
         
     except Exception as e:
-        print(f"Error parsing batch method body results: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"[ERROR] get_method_bodies_from_signatures_batch hit an exception: {e}")
         return [("", (0, 0))] * len(full_signatures)
 
-
-########################################################################################
-# HELPER FUNCTIONS FOR GET_APIS_FROM_VAR
-########################################################################################
 
 def get_buggy_variable_type(session: JoernSession, java_file_path: str, var_name, line_numbers: Tuple[int, int]) -> Optional[str]:
     # Assume that there is only one variable with the given name within the buggy line range
@@ -301,7 +279,7 @@ def get_buggy_variable_type(session: JoernSession, java_file_path: str, var_name
     # Filter by class name first (to limit to the correct file), then filter identifiers by line number
     query = f'cpg.typeDecl.name("{class_name}").ast.isIdentifier.filter(i => i.name == "{var_name}" && i.lineNumber.isDefined && i.lineNumber.get >= {start_line} && i.lineNumber.get <= {end_line}).typeFullName.l'
     
-    stdout, stderr = session._run_joern_query(query)
+    stdout, _ = session.run_joern_query(query)
     if not stdout:
         return None
     
@@ -337,8 +315,9 @@ def get_buggy_variable_type(session: JoernSession, java_file_path: str, var_name
             return quoted_strings[0]
         
         return None
+
     except Exception as e:
-        print(f"Error parsing variable type: {e}")
+        print(f"[ERROR] get_buggy_variable_type hit an exception: {e}")
         return None
 
 
@@ -370,11 +349,11 @@ def get_apis_from_var_type(variable_type: str, reference_checkout_dir: str) -> L
         if result.returncode != 0:
             # Export failed - checkout might be broken (e.g., from a previous failed patch)
             # Reset and retry once
-            print(f"ERROR: Failed to export classpath (checkout may be broken).")
+            print(f"[ERROR] get_apis_from_var_type: Failed to export classpath (checkout may be broken).")
         
         classpath = result.stdout.strip()
         if not classpath:
-            print(f"ERROR: Empty classpath returned from Defects4J")
+            print(f"[ERROR] get_apis_from_var_type: Empty classpath returned from Defects4J")
             return []
         
         # Convert variable type format for javap
@@ -397,7 +376,7 @@ def get_apis_from_var_type(variable_type: str, reference_checkout_dir: str) -> L
         )
         
         if javap_result.returncode != 0:
-            print(f"ERROR: javap failed: {javap_result.stderr}")
+            print(f"[ERROR] get_apis_from_var_type: javap failed: {javap_result.stderr}")
             return []
         
         # Parse javap output to extract method signatures
@@ -422,7 +401,5 @@ def get_apis_from_var_type(variable_type: str, reference_checkout_dir: str) -> L
         return methods
         
     except Exception as e:
-        print(f"Error getting APIs from variable type: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"[ERROR] get_apis_from_var_type hit an exception: {e}")
         return []

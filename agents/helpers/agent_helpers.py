@@ -24,30 +24,25 @@ from agents.data_structures.dicts import BugDict, ContextDict
 from tools.context_retrieval.parsing_retrieval_funcs import tree_sitter_utils as utils
 
 
-########################################################
-# Helper functions for running one round of agent interactions
-########################################################
 async def run_patch_test_loop(patcher_id: str, admin_agent: AgentId, runtime: SingleThreadedAgentRuntime,
-                              num_rounds: int = 3, context_dict: ContextDict = None) -> int:
+                              num_attempts: int = 3, context_dict: ContextDict = None) -> int:
     """
-    Run num_rounds rounds of patching and testing for a given PatchingAgent
+    Run num_attempts attempts of patching and testing for a given PatchingAgent
     Default 3 rounds if user doesn't specify
     """
-    print(f"[{patcher_id}] Loop started")
-    round = 1
+    attempt = 1
 
-    # TODO: remove this?
-    while (round <= num_rounds):
+    while attempt <= num_attempts:
+        print(f"===== Agent {patcher_id}, Attempt {attempt}: Starting patching attempt... =====")
         # Create patching task (initial or regeneration)
-        if (round == 1):
-            patching_task = PatchingTask(patcher_id=patcher_id, message="Follow the instructions to generate a patch.", patching_attempt=round)
+        if attempt == 1:
+            patching_task = PatchingTask(patcher_id=patcher_id, message="Follow the instructions to generate a patch.", patching_attempt=attempt)
         else:
             # Reprompt to regenerate the patch
-            patching_task = PatchingTask(patcher_id=patcher_id, message=f"Based on the previous messages and failing test information, regenerate the patch.", patching_attempt=round)
+            patching_task = PatchingTask(patcher_id=patcher_id, message=f"Based on the previous messages and failing test information, regenerate the patch.", patching_attempt=attempt)
         
         # Send single patching task to AdminAgent
         patching_response = await runtime.send_message(patching_task, recipient=admin_agent)
-        print(f"[{patcher_id}] Round {round} - Patching result: {patching_response.result}")
 
         from agents.agents import PatchingAgent
         patcher_agent = PatchingAgent.instances_dict.get(patcher_id)
@@ -59,7 +54,7 @@ async def run_patch_test_loop(patcher_id: str, admin_agent: AgentId, runtime: Si
                 "for each unique buggy node (see system prompt). Check that every block is "
                 "enclosed in ``` and that you did not combine multiple nodes into one block."
             )
-            print(f"[{patcher_id}] Round {round} - {patch_error}")
+            print(f"[ERROR] Agent {patcher_id}, attempt {attempt}: Unable to apply patch")
             if patcher_agent:
                 await patcher_agent.add_test_result(patch_error, False, source="system")
         else:
@@ -78,7 +73,7 @@ async def run_patch_test_loop(patcher_id: str, admin_agent: AgentId, runtime: Si
             )
 
             if testing_response.success:
-                print(f"[{patcher_id}] Test passed: {testing_response.str_result}")
+                print(f"Agent {patcher_id}, attempt {attempt}: Test passed, saving candidate patch")
                 patcher_agent.save_candidate_patch(patching_response.mapping)
                 break
             # Only the context retrieval agent passes in context_dict as an arg because it needs access to the
@@ -86,12 +81,13 @@ async def run_patch_test_loop(patcher_id: str, admin_agent: AgentId, runtime: Si
             # don't need this so we set the default value context_dict=None
             elif context_dict is not None:
                 context_dict.add_info("test info", testing_response.list_result)
+            print(f"Agent {patcher_id}, attempt {attempt}: Test failed, continuing to next attempt")
 
-        round += 1
+        attempt += 1
 
-    # Return the number of rounds completed
-    # If we broke early, round is the correct number. If we completed all rounds, round is num_rounds + 1
-    return round if round <= num_rounds else num_rounds
+    # Return the number of attempts completed
+    # If we broke early, attempt is the correct number. If we completed all attempts, attempt is num_attempts + 1
+    return attempt if attempt <= num_attempts else num_attempts
 
 
 async def run_single_attempt_context(attempt_num: int, admin_agent: AgentId, runtime: SingleThreadedAgentRuntime, context_dict: ContextDict) -> str:
@@ -116,13 +112,12 @@ async def run_single_attempt_context(attempt_num: int, admin_agent: AgentId, run
     Returns:
         The final summary string (with past summaries prepended)
     """
-    print(f"[context] Starting context retrieval attempt {attempt_num}...")
-    
+    print(f"===== Starting context retrieval attempt {attempt_num} =====")
     # Step 1: Send ContextRetrievalTask to AdminAgent
     # Note: retrieval_attempt in ContextRetrievalTask refers to the attempt number
     context_task = ContextRetrievalTask(retrieval_attempt=attempt_num)
     context_response = await runtime.send_message(context_task, recipient=admin_agent)
-    print(f"[context] Attempt {attempt_num} - Context retrieval completed (all rounds done)")
+    print(f"Context retrieval attempt {attempt_num}: Context retrieval completed")
     
     # Step 2: Get past summaries from ContextDict
     past_summaries = context_dict.get_retrieved_context()
@@ -138,7 +133,7 @@ async def run_single_attempt_context(attempt_num: int, admin_agent: AgentId, run
         )
         summary_response = await runtime.send_message(summary_task, recipient=admin_agent)
         current_summary = summary_response.summary
-        print(f"[context] Attempt {attempt_num} - Summary completed")
+        print(f"Context retrieval attempt {attempt_num}: Summary completed")
     else:
         current_summary = "No context has been retrieved yet."
     
@@ -168,9 +163,6 @@ async def run_single_attempt_context(attempt_num: int, admin_agent: AgentId, run
     return final_summary
 
 
-########################################################
-# Helper function for validating function call format for context retrieval
-########################################################
 def is_valid_format(file_functions) -> bool:
     """True if file_functions matches {file_path: [{func_name: {args}}, ...]}."""
     if not isinstance(file_functions, dict) or not file_functions:
@@ -186,9 +178,6 @@ def is_valid_format(file_functions) -> bool:
                 return False
     return True
 
-########################################################
-# Helper functions for getting and formatting information
-########################################################
 
 def get_patching_system_message(bug_dict: BugDict, patching_system_prompt: str, agent_specific_prompt: str, context_summary: str = "") -> SystemMessage:
     """
@@ -210,6 +199,7 @@ def get_patching_system_message(bug_dict: BugDict, patching_system_prompt: str, 
     
     return SystemMessage(content=msg)
 
+
 def get_context_retrieval_system_message(bug_dict: BugDict, context_dict: ContextDict, prompt_template: str,) -> SystemMessage:
     """
     Get the system message for a ContextRetrievalAgent using the provided prompt template
@@ -228,6 +218,7 @@ def get_context_retrieval_system_message(bug_dict: BugDict, context_dict: Contex
     msg = msg.replace("{past_retrieval_attempts}", past_retrieval_str)
 
     return SystemMessage(content=msg)
+
 
 def format_bug_info(bug_dict: BugDict) -> str:
     """Format bare minimum bug information without additional analysis"""
@@ -248,6 +239,7 @@ def format_bug_info(bug_dict: BugDict) -> str:
         bug_number = next_bug_number  # Continue bug numbering across files
         
     return result
+
 
 def format_bugs_grouped_by_node(buggy_file_info, bug_dict: BugDict, start_number: int = 1) -> Tuple[str, int]:
     """
@@ -329,6 +321,7 @@ def format_bugs_grouped_by_node(buggy_file_info, bug_dict: BugDict, start_number
     
     return result, bug_number
 
+
 def format_short_bug_info(bug_dict: BugDict) -> str:
     """
     Format only the bug locations for context retrieval instructions
@@ -346,6 +339,7 @@ def format_short_bug_info(bug_dict: BugDict) -> str:
         result += "\n"
     
     return result
+
 
 def format_initial_available_functions(context_dict: ContextDict, attempt_num: int) -> str:
     """
@@ -404,6 +398,7 @@ def format_current_context(current_round_results: dict, reasoning: str, context_
 
     return result
 
+
 def format_available_functions(context_dict: ContextDict) -> str:
     """
     Format the remaining functions available to be called
@@ -417,9 +412,6 @@ def format_available_functions(context_dict: ContextDict) -> str:
             result += f"  - {file_path}: {', '.join(available_for_file)}\n"
     return result
 
-########################################################
-# Helper functions for logging and printing message threads
-########################################################
 
 async def log_message(
     context: UnboundedChatCompletionContext,
@@ -491,8 +483,7 @@ async def save_message_thread(
             else:
                 f.write(f"[{i}] {type(msg).__name__}: {msg}\n")
         f.write(f"{'='*80}\n")
-    
-    print(f"Message thread saved to: {file_path}")
+    print(f"Message thread saved for {agent_id} agent")
 
 
 async def save_all_message_threads(
@@ -523,5 +514,7 @@ async def save_all_message_threads(
             context_agent_instance.chat_messages,
             agent_id="context_retrieval",
             bug_dict=bug_dict,
-            messages=all_context_messages,
+            messages_to_log=all_context_messages,
         )
+
+    print("Message threads saved for all instantiated agents")

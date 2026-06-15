@@ -1,3 +1,8 @@
+"""
+Classes for Admin, Patching, Testing, Context Retrieval, Selection, and Summary agents.
+@message_handler decorators are used to define the behavior when send_message is called
+"""
+
 import os
 import shutil
 import sys
@@ -24,15 +29,17 @@ from agents.data_structures.data_classes import (
 from agents.helpers import agent_helpers as helpers
 from agents.data_structures.dicts import BugDict, ContextDict
 from agents.helpers import patch_utils
-from agents.helpers.function_call import create_context_retrieval_function
-from agents.helpers import cr_functions as cr_funcs
+from agents.helpers.function_call_schema import create_function_call_schema
+from agents.helpers import context_retrieval_functions as functions
 
 from tools.test_suites import test_suites as ts
 
-# this is the maximum number of rounds of context retrieval performed per patching/retrieval attempt
-MAX_ROUNDS = 3
 
 class AdminAgent(RoutedAgent):
+    """
+    Responsible for routing tasks to the appropriate agents and managing the overall workflow.
+    """
+
     def __init__(self, receiver_instances: dict[str, list[AgentId]], context_dict: ContextDict = None, runtime = None):
         super().__init__("Admin Agent")
         self.patching_instances = receiver_instances.get("patching", [])
@@ -47,14 +54,12 @@ class AdminAgent(RoutedAgent):
         
         # Log of messages routed through AdminAgent (not sent to an LLM)
         self.chat_messages = UnboundedChatCompletionContext(initial_messages=[])
-    
+
     def get_chat_messages(self) -> UnboundedChatCompletionContext:
         return self.chat_messages
 
     @message_handler
-    async def process_patching_tasks(self, message: PatchingTask, ctx: MessageContext) -> PatchingResponse:
-        print(f"Patching task received by agent with patcher_id: {message.patcher_id}.")
-        
+    async def process_patching_tasks(self, message: PatchingTask, ctx: MessageContext) -> PatchingResponse:        
         # If this is a context patching request, route to context patching handler
         if message.patcher_id == "context":
             return await self.process_context_patching_task(message, ctx)
@@ -92,7 +97,7 @@ class AdminAgent(RoutedAgent):
         )
         
         return patching_response
-    
+
     @message_handler
     async def process_testing_task(self, message: TestingTask, ctx: MessageContext) -> TestingResponse:
         # Log incoming testing task (source is the sender, or "main" if None)
@@ -116,7 +121,7 @@ class AdminAgent(RoutedAgent):
         
         # Just return the testing response - run_patch_test_loop handles regeneration logic
         return testing_response
-    
+
     @message_handler
     async def process_context_retrieval_task(self, message: ContextRetrievalTask, ctx: MessageContext) -> ContextRetrievalResponse:
         # Log incoming context retrieval task (source is the sender, or "main" if None)
@@ -143,7 +148,7 @@ class AdminAgent(RoutedAgent):
         )
         
         return context_response
-    
+
     @message_handler
     async def process_summary_task(self, message: SummaryTask, ctx: MessageContext) -> SummaryResponse:
         # Log incoming summary task (source is the sender, or "main" if None)
@@ -169,7 +174,7 @@ class AdminAgent(RoutedAgent):
         )
         
         return summary_response
-    
+
     @message_handler
     async def process_selection_task(self, message: SelectionTask, ctx: MessageContext) -> SelectionResponse:
         # Log incoming selection task (source is the sender, or "main" if None)
@@ -200,9 +205,7 @@ class AdminAgent(RoutedAgent):
         """
         Handle context patching: first retrieve context, then send patching task with context summary.
         Note: This is not a @message_handler because it's called from process_patching_tasks.
-        """
-        print(f"[context_patching] Starting context patching for agent: {message.patcher_id}")
-        
+        """        
         # Log incoming context patching task
         sender_key = ctx.sender.key if ctx.sender else "main"
         await helpers.log_message(
@@ -219,14 +222,12 @@ class AdminAgent(RoutedAgent):
         # Use the patching attempt number as the attempt number for context retrieval
         # Each patching attempt gets its own context retrieval attempt (up to 3 rounds of retrieval)
         attempt_num = message.patching_attempt
-        print(f"[context_patching] Running context retrieval for patching attempt {attempt_num} (context retrieval attempt {attempt_num})")
         context_summary = await helpers.run_single_attempt_context(
             attempt_num=attempt_num,
             admin_agent=self.id,
             runtime=self._runtime,
             context_dict=self.context_dict
         )
-        print(f"[context_patching] Context retrieval completed for attempt {attempt_num}. Summary length: {len(context_summary)} characters")
         
         # Step 2: Create a new PatchingTask with the context summary included
         patching_task_with_context = PatchingTask(
@@ -260,12 +261,16 @@ class AdminAgent(RoutedAgent):
 
 
 class PatchingAgent(RoutedAgent):
+    """
+    Generic class for all agents that generate patches.
+    There are various types of patching agents, each with their own specific prompts and behaviors.
+    """
     # Class variable to store instances by their key (shared across all instances)
     instances_dict = {}
     # Class variable to store all candidate patch info (i.e., the dict returned by save_candidate_patch)
     #  across all runs, for all patching agent instances
     candidate_patches = []
-    
+
     def __init__(self, model_client: ChatCompletionClient, bug_dict: BugDict, patching_system_prompt: str, agent_prompts: dict[str, str]):
         super().__init__("Patching Agent")
         self.model_client = model_client
@@ -290,8 +295,6 @@ class PatchingAgent(RoutedAgent):
         self.chat_messages = UnboundedChatCompletionContext(initial_messages=[self.system_message])
 
     @message_handler
-    # When runtime.send_message is called with an argument of type Task, this on_task method is called
-    # The response of send_message is a TaskResponse object
     async def on_task(self, message: PatchingTask, ctx: MessageContext) -> PatchingResponse:
         # Store this instance in the class dictionary (shared across all instances)
         if self.id.key not in PatchingAgent.instances_dict:
@@ -337,9 +340,6 @@ class PatchingAgent(RoutedAgent):
         
         result_text = llm_result.content
         # Save patches and get mapping of modified_source_name -> (patch_file_path, patched_nodes)
-        print(f"--------------------------------")
-        print(f"result_text: {result_text}")
-        print(f"--------------------------------")
         patch_mapping = self.save_patch(result_text, patching_attempt=message.patching_attempt)
 
         # Add assistant response to context (for next round)
@@ -348,9 +348,7 @@ class PatchingAgent(RoutedAgent):
 
         # Return the patch mapping - AdminAgent will handle sending to TestingAgent
         return PatchingResponse(patcher_id=self.id.key, result=result_text, mapping=patch_mapping)
-    
-    # When TestingAgent sends a test result, add it to the conversation context
-    # This does not happen automatically, so we need to add it manually
+
     async def add_test_result(self, test_str_result: str, success: bool, source: str = "testing"):
         """Add a test result to the conversation context"""
         # Format the test result message
@@ -399,7 +397,7 @@ class PatchingAgent(RoutedAgent):
             patch_mapping = {}
 
         return patch_mapping
-    
+
     def save_candidate_patch(self, patch_mapping: dict[str, tuple[str, list[str]]]):
         """
         Given a patch mapping of a patch that has passed all test suites, save the full patched files
@@ -442,10 +440,14 @@ class PatchingAgent(RoutedAgent):
 
 
 class TestingAgent(RoutedAgent):
+    """
+    Responsible for running the test suites and returning the results.
+    """
+
     def __init__(self, bug_dict: BugDict):
         super().__init__("Testing Agent")
         self.bug_dict = bug_dict
-    
+
     @message_handler
     async def on_task(self, message: TestingTask, ctx: MessageContext) -> TestingResponse:   
         # full_mapping is the mapping of modified_source_name -> (patch_file_path, patched_nodes)
@@ -477,7 +479,7 @@ class TestingAgent(RoutedAgent):
         else:
             if test_result['success'] == False:
                 all_tests_passed = False
-                failing_test_info_string += 'Error: Test command did not run. Check for possible errors such as undefined function calls, compile errors, etc.'
+                failing_test_info_string += 'Error: Test command did not run. Check for possible errors such as undefined function calls, API usage without importation, compile errors, etc.'
             if len(test_result['failing_tests']) > 0:
                 all_tests_passed = False
                 test_info_string, test_info_list = ts.get_failing_test_info(agent_checkout_dir, project_name, test_result['failing_tests'])
@@ -491,11 +493,16 @@ class TestingAgent(RoutedAgent):
 
 
 class ContextRetrievalAgent(RoutedAgent):
-    def __init__(self, model_client: ChatCompletionClient, context_dict: ContextDict, bug_dict: BugDict, agent_prompts: dict[str, str]):
+    """
+    Retrieves context for the PatchingAgent to use when generating a patch
+    """
+
+    def __init__(self, model_client: ChatCompletionClient, context_dict: ContextDict, bug_dict: BugDict, agent_prompts: dict[str, str], num_rounds: int):
         super().__init__("Context Retrieval Agent")
         self.context_dict = context_dict
         self.bug_dict = bug_dict
         self.model_client = model_client
+        self.num_rounds = num_rounds
 
         # Initialize CPG if Joern configuration is available
         self.initialize_cpg()
@@ -523,7 +530,7 @@ class ContextRetrievalAgent(RoutedAgent):
         """
         current_messages = await self.chat_messages.get_messages()
         return [current_messages[0]] + self.archived_messages + current_messages[1:]
-    
+
     def initialize_cpg(self):
         """Initialize Joern CPG for the project if it doesn't already exist."""
         import os
@@ -547,11 +554,9 @@ class ContextRetrievalAgent(RoutedAgent):
         # Check if CPG already exists
         cpg_path = os.path.join(joern_workspace_path, "cpg.bin.zip")
         if os.path.exists(cpg_path):
-            print(f"[CPG] CPG already exists at {cpg_path}, skipping creation")
             return
         
         # Create CPG
-        print(f"[CPG] CPG not found at {cpg_path}, creating it...")
         joern_session = JoernSession(
             joern_executable,
             joern_workspace_path,
@@ -562,17 +567,19 @@ class ContextRetrievalAgent(RoutedAgent):
             bug_id=bug_id,
             reference_checkout_dir=reference_checkout_dir,
         )
-        
-        if not success:
-            print(f"[CPG] WARNING: Failed to create CPG. Some context retrieval functions may not work.")
+
+        if success:
+            print("CPG created successfully when initializing Context Retrieval Agent")
         else:
-            print(f"[CPG] CPG created successfully at {cpg_path}")
+            print("[ERROR] Failed to create CPG when initializing Context Retrieval Agent")
 
     @message_handler
     async def on_task(self, message: ContextRetrievalTask, ctx: MessageContext) -> ContextRetrievalResponse:
+        """
+        Perform a single context retrieval attempt, which consists of up to NUM_ROUNDS rounds
+        """
         # Initialize tools, wrap in list since OpenAI API expects tools to be a list
-        tools = [create_context_retrieval_function()]
-        max_rounds = MAX_ROUNDS  # Each attempt consists of up to MAX_ROUNDS rounds
+        tools = [create_function_call_schema()]
         all_retrieval_results = ""  # String for logging (not used in final response)
         attempt_num = message.retrieval_attempt
 
@@ -595,9 +602,9 @@ class ContextRetrievalAgent(RoutedAgent):
         initial_available_message = helpers.format_initial_available_functions(self.context_dict, attempt_num)
         await self.chat_messages.add_message(UserMessage(content=initial_available_message, source="system"))
 
-        # Loop through rounds internally (up to 3 rounds per attempt)
+        # Loop through rounds internally (up to self.num_rounds rounds per attempt)
         round = 1
-        while round <= max_rounds:
+        while round <= self.num_rounds:
             # Call LLM for this round
             messages = await self.chat_messages.get_messages()
             llm_result = await self.model_client.create(
@@ -607,15 +614,20 @@ class ContextRetrievalAgent(RoutedAgent):
             )
             
             # llm_result.content is either:
-            # - str: LLM responded with text (e.g., "I have enough context")
-            # - list[FunctionCall]: LLM called the request_context function (always a list when function is called)
+            # - str: Agent responded with text (e.g., "I have enough context")
+            # - list[FunctionCall]: Agent called the request_context function (always a list when function is called)
             if isinstance(llm_result.content, str):
-                # TODO: test out a few times to make sure LLM actually listens to instructions
+                # Case 1: enough context retrieved, skip all remaining rounds in this attempt
                 if "I have enough context" in llm_result.content.lower():
+                    log_content = "Enough context has been retrieved, no functions called in round {round} of attempt {attempt_num}."
+                    await self.chat_messages.add_message(UserMessage(content=log_content, source="system"))
                     break
-                # Otherwise, continue to next round (llm didn't follow instructions correctly, this is ideally never reached)
-                round += 1
-                continue
+                # Case 2: unexpected string response, continue to next round (this is ideally never reached)
+                else:
+                    log_content = f"Error in round {round} of attempt {attempt_num}, received the following text:\n{llm_result.content}"
+                    await self.chat_messages.add_message(UserMessage(content=log_content, source="system"))
+                    round += 1
+                    continue
             
             # Parse function call - llm_result.content is a list[FunctionCall] when function is called
             # Each FunctionCall has:
@@ -627,45 +639,27 @@ class ContextRetrievalAgent(RoutedAgent):
             llm_result_content = llm_result.content[0]
             
             # Get arguments from function call (autogen's FunctionCall.arguments is always a JSON string)
-            print(f"[DEBUG] Raw function call arguments: {llm_result_content.arguments}")
             try:
                 args = json.loads(llm_result_content.arguments)
             except json.JSONDecodeError as e:
-                print(f"[ERROR] Failed to parse JSON arguments: {e}")
-                print(f"[ERROR] Raw arguments string: {llm_result_content.arguments}")
+                print(f"[ERROR] Failed to parse JSON arguments from Context Retrieval Agent function call: {e}")
                 round += 1
                 continue
             
             # Extract file_functions dict: {file_path: [function_names]}
             file_functions = args.get("file_functions", {})
-            reasoning = args.get("reasoning", "")  # LLM's reasoning for why it selected these functions
-            #TODO: figure out better way to pass function arguments
-            # TODO: figure out selected_methods and 2-hop expansion
-            selected_methods = args.get("selected_methods", [])  # For 2-hop API expansion
+            reasoning = args.get("reasoning", "")  # Agent's reasoning for why it selected these functions
 
             if not helpers.is_valid_format(file_functions):
                 await self.chat_messages.add_message(UserMessage(
                     content=(
                         f"Error in Round {round}: Function requests were returned in the wrong format. "
                         f"See the example in the system prompt: each file path must map to a list of function calls, "
-                        f"e.g. \"file.java\": [{{\"comment_retrieval\": {{\"start_line\": 1, \"end_line\": 2}}}}]. "
                         f"Your reasoning was: {reasoning}."
                     ),
                     source="system",
                 ))
-                print(f"[WARNING] Round {round} - Invalid file_functions format: {file_functions}")
                 continue
-
-            # Debug: Show what LLM actually requested vs what it said in reasoning
-            # TODO: remove this later?
-            all_requested = []
-            for file_path, func_calls in file_functions.items():
-                for func_call_dict in func_calls:
-                    function_name = list(func_call_dict.keys())[0]
-                    all_requested.append(function_name)
-            print(f"[DEBUG] Round {round} - LLM reasoning said: {reasoning}")
-            print(f"[DEBUG] Round {round} - LLM actually requested functions: {all_requested}")
-            print(f"[DEBUG] Round {round} - Parsed file_functions dict: {file_functions}")
             
             # Validate file paths and functions
             available_functions_dict = self.context_dict.get_available_functions()
@@ -677,7 +671,6 @@ class ContextRetrievalAgent(RoutedAgent):
             for file_path, function_calls in file_functions.items():
                 # Validate file path
                 if file_path not in valid_file_paths:
-                    print(f"Warning: LLM requested invalid file path '{file_path}'. Valid paths: {valid_file_paths}")
                     continue  # Skip invalid file paths
                 
                 # Extract function names and arguments from new structure
@@ -692,7 +685,6 @@ class ContextRetrievalAgent(RoutedAgent):
                     
                     # Validate function name
                     if function_name not in valid_functions:
-                        print(f"Warning: LLM requested invalid function '{function_name}' for {file_path}. Valid: {valid_functions}")
                         # Add error message instead of silently skipping
                         current_round_results[file_path][function_name] = f"ERROR: Function '{function_name}' has already been called in a previous round or is not available for this file."
                         continue  # Skip executing the function, but error message is already added
@@ -739,7 +731,7 @@ class ContextRetrievalAgent(RoutedAgent):
             retrieval_attempt=message.retrieval_attempt,  # This is the attempt number
             function_results=all_retrieval_results  # All rounds' results with reasoning (for SummaryAgent)
         )
-    
+
     def execute_functions(self, function_name: str, file_path: str, function_args: dict = None):
         """Execute context retrieval functions.
         
@@ -770,36 +762,37 @@ class ContextRetrievalAgent(RoutedAgent):
             except ValueError as e:
                 # If class name extraction fails, log warning but continue
                 # Some functions don't require class_name, so we'll handle it per function
-                print(f"Warning: Could not extract class name: {e}")
+                pass
         
-        # Functions from cr_functions.py
+        # Functions from context_retrieval_functions.py
         if function_name == "comment_retrieval":
-            return cr_funcs.comment_retrieval(file_path, start_line, end_line)
+            return functions.comment_retrieval(file_path, start_line, end_line)
         elif function_name == "similar_lines_of_code":
             if class_name is None:
                 return f"ERROR: similar_lines_of_code requires class_name but could not extract it from {file_path} at lines {start_line}-{end_line}"
-            return cr_funcs.top_k_code_snippets(file_path, start_line, end_line, class_name, self.bug_dict, self.context_dict)
+            return functions.top_k_code_snippets(file_path, start_line, end_line, class_name, self.bug_dict, self.context_dict)
         elif function_name == "similar_function_name":
             if class_name is None:
                 return f"ERROR: similar_function_name requires class_name but could not extract it from {file_path} at lines {start_line}-{end_line}"
-            _, formatted_results_str = cr_funcs.top_k_class_signatures(file_path, start_line, end_line, class_name, self.bug_dict, self.context_dict)
+            _, formatted_results_str = functions.top_k_class_signatures(file_path, start_line, end_line, class_name, self.bug_dict, self.context_dict)
             return formatted_results_str
         elif function_name == "all_funcs_in_class":
             if start_line is None or end_line is None:
                 return f"ERROR: all_funcs_in_class requires start_line and end_line arguments. Provided: start_line={start_line}, end_line={end_line}"
-            return cr_funcs.all_funcs_in_class(file_path, start_line, end_line, self.bug_dict)
+            return functions.all_funcs_in_class(file_path, start_line, end_line, self.bug_dict)
         elif function_name == "one_hop_api_retrieval":
             if start_line is None or end_line is None or variable is None:
                 return f"ERROR: one_hop_api_retrieval requires start_line, end_line, and var arguments. Provided: start_line={start_line}, end_line={end_line}, var={variable}"
-            return cr_funcs.one_hop_api_retrieval(file_path, start_line, end_line, variable, self.bug_dict)
+            return functions.one_hop_api_retrieval(file_path, start_line, end_line, variable, self.bug_dict)
         elif function_name == "get_callers":
             if start_line is None or end_line is None:
                 return f"ERROR: get_callers requires start_line and end_line arguments. Provided: start_line={start_line}, end_line={end_line}"
             if class_name is None:
                 return f"ERROR: get_callers requires class_name but could not extract it from {file_path} at lines {start_line}-{end_line}"
-            return cr_funcs.get_callers(file_path, start_line, end_line, self.bug_dict, class_name)
+            return functions.get_callers(file_path, start_line, end_line, self.bug_dict, class_name)
         else:
             return f"Unknown function: {function_name} for {file_path}"
+
 
 class SelectionAgent(RoutedAgent):
     """
@@ -856,13 +849,10 @@ class SelectionAgent(RoutedAgent):
             assistant_message = AssistantMessage(content=result_text, source=self.id.key)
             await self.chat_messages.add_message(assistant_message)
 
-            # TODO: figure out a better way to enforce the agent to respond with exactly what's expected,
-            # or maybe try to parse for any agent name in the response as a fallback
             # Parse the best agent: the first line should be exactly one of (basic, context...)
             first_line = result_text.strip().splitlines()[0].strip().strip("\"'`")
             if first_line in candidate_agent_names:
                 selected_agent_name = first_line
-                print(f"[selection] Selected candidate patch generated by the following agent: {selected_agent_name}")
             else:
                 return SelectionResponse(selected_patch_description=f"Could not parse first line '{first_line}' as a patcher id.")
 
@@ -909,12 +899,13 @@ class SelectionAgent(RoutedAgent):
             full_filepath = os.path.join(save_dir, patch_filename)
             # copy contents of original patched file under candidate_patches to the final_patch directory
             shutil.copy2(file_info["patch file path"], full_filepath)
-            print(f"[selection] Saved final patch to {full_filepath}")
 
 
 class SummaryAgent(RoutedAgent):
-    """Agent that summarizes context retrieval results."""
-    
+    """
+    Agent that summarizes context retrieval results from the ContextRetrievalAgent.
+    """
+
     def __init__(self, model_client: ChatCompletionClient, agent_prompts: dict[str, str]):
         super().__init__("Summary Agent")
         self.model_client = model_client
@@ -928,7 +919,7 @@ class SummaryAgent(RoutedAgent):
 
         self.system_message = SystemMessage(content=summary_prompt)
         self.chat_messages = UnboundedChatCompletionContext(initial_messages=[self.system_message])
-    
+
     @message_handler
     async def on_task(self, message: SummaryTask, ctx: MessageContext) -> SummaryResponse:
         """Summarize context retrieval results for the CURRENT attempt only."""

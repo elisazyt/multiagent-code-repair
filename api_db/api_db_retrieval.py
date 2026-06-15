@@ -13,7 +13,6 @@ JAVA_LANGUAGE = Language(tree_sitter_java.language())
 parser = Parser(JAVA_LANGUAGE)
 
 
-# Retrieve all imported APIs from the original code file
 def retrieve_existing_apis(java_file_path: str):
     # Read code (bytes)
     with open(java_file_path, 'rb') as f:
@@ -45,7 +44,6 @@ def get_api_db_path():
     return API_DB_PATH
 
 
-# Retrieve APIs by category, avoiding duplicates with existing APIs
 def query_api_db(apis_to_retrieve: list, existing_apis: list):
     API_DB_PATH = get_api_db_path()
     retrieved_apis = []
@@ -60,7 +58,6 @@ def query_api_db(apis_to_retrieve: list, existing_apis: list):
     return retrieved_apis
 
 
-# Function calling implementation for OpenAI agents
 def get_api_categories() -> List[str]:
     """Get all available API categories from the database"""
     API_DB_PATH = get_api_db_path()

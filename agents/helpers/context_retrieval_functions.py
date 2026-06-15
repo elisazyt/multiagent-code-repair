@@ -1,3 +1,8 @@
+"""
+Functions called by the ContextRetrievalAgent.
+These are essentially wrappers of the functions defined in context_retrieval_implementations.py
+"""
+
 import sys
 import os
 from typing import List, Tuple
@@ -7,7 +12,7 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
 from tools.context_retrieval.parsing_retrieval_funcs import tree_sitter_utils as utils
-import tools.context_retrieval.parsing_retrieval_funcs.cr_function_implementations as functions
+import tools.context_retrieval.parsing_retrieval_funcs.context_retrieval_implementations as implementations
 from tools.context_retrieval.parsing_retrieval_funcs.joern_session import JoernSession
 import tools.context_retrieval.parsing_retrieval_funcs.joern_utils as joern_utils
 from agents.data_structures.dicts import BugDict, ContextDict
@@ -40,7 +45,7 @@ def comment_retrieval(java_file_path: str, start_line: int, end_line: int) -> st
             code = f.read()
         
         # Get comments before the node
-        comments_before_node = functions.get_comments_before_node(java_file_path, buggy_node)
+        comments_before_node = implementations.get_comments_before_node(java_file_path, buggy_node)
         
         if comments_before_node:
             comments_text = utils.get_node_text(comments_before_node, code)
@@ -85,7 +90,7 @@ def all_funcs_in_class(java_file_path: str, start_line: int, end_line: int, bug_
         if not joern_session.load_cpg(cpg_project_name):
             return f"ERROR: Could not load CPG for project '{cpg_project_name}'. Make sure CPG is created first."
         
-        signatures = functions.get_full_signatures_in_buggy_class(joern_session, java_file_path, bug_location)
+        signatures = implementations.get_full_signatures_in_buggy_class(joern_session, java_file_path, bug_location)
         
         if not signatures:
             return f"No methods found in class containing bug location ({start_line}, {end_line})"
@@ -140,9 +145,8 @@ def top_k_class_signatures(java_file_path: str, start_line: int, end_line: int, 
             error_msg = f"ERROR: Could not load CPG for project '{cpg_project_name}'. Make sure CPG is created first."
             return ([], error_msg)
         
-        full_signatures = functions.get_full_signatures_in_buggy_class(joern_session, java_file_path, bug_location)
+        full_signatures = implementations.get_full_signatures_in_buggy_class(joern_session, java_file_path, bug_location)
         if not full_signatures:
-            print("WARNING: No signatures found in class. Returning empty list.")
             return ([], "WARNING: No signatures found in class.")
 
         test_info_list = context_dict.get_info("test info")
@@ -156,17 +160,14 @@ def top_k_class_signatures(java_file_path: str, start_line: int, end_line: int, 
 
         buggy_sig = joern_utils.get_full_method_signature_from_line_numbers(joern_session, java_file_path, bug_location, class_name)
         if not buggy_sig:
-            print(f"WARNING: Could not find method signature at bug location {bug_location}")
-            return ([], f"WARNING: Could not find method signature at bug location {bug_location}")
+            return ([], f"ERROR: Could not find method signature at bug location {bug_location}")
 
-        from tools.context_retrieval.bm25_rag import bm25_search as search
+        from tools.context_retrieval.vector_retrieval import bm25_search as search
 
         index_path = search.make_index(full_signatures, bug_dict, context_dict)
 
         # Request k+1 results in case the buggy signature is in the top k
         results = search.search(k + 1, test_info_list, buggy_sig, index_path, class_name=class_name)
-        if not results:
-            return ([], "ERROR: BM25 search returned no results.")
 
         filtered_results = [sig for sig in results if sig != buggy_sig][:k]
         filtered_results_full_sig = filtered_results
@@ -178,16 +179,10 @@ def top_k_class_signatures(java_file_path: str, start_line: int, end_line: int, 
             formatted_results.append(f"{i}. {signature}")
         
         formatted_results_str = "\n".join(formatted_results)
-        
-        print("\nFormatted results (ranked by BM25 score, buggy signature excluded):")
-        print(formatted_results_str)
         return (filtered_results_full_sig, formatted_results_str)
     except Exception as e:
-        error_msg = f"ERROR: Failed to retrieve top k class signatures: {str(e)}"
-        print(error_msg)
-        import traceback
-        traceback.print_exc()
-        return ([], error_msg)
+        print(f"[ERROR] top_k_class_signatures hit an exception: {e}")
+        return ([], f"ERROR: top_k_class_signatures failed: {e}")
 
 
 def top_k_code_snippets(java_file_path: str, start_line: int, end_line: int, class_name: str, bug_dict: BugDict, context_dict: ContextDict) -> str:
@@ -235,7 +230,7 @@ def top_k_code_snippets(java_file_path: str, start_line: int, end_line: int, cla
             return f"ERROR: Could not load CPG for project '{cpg_project_name}'. Make sure CPG is created first."
         
         # Get method bodies from signatures
-        from tools.context_retrieval.bm25_rag.unixcoder_rag import (
+        from tools.context_retrieval.vector_retrieval.unixcoder_retrieval import (
             embed_code_snippets,
             embed_bug_location,
             get_top_k_code_snippets,
@@ -255,6 +250,7 @@ def top_k_code_snippets(java_file_path: str, start_line: int, end_line: int, cla
         return "Top k similar code snippets:\n" + "\n\n".join(formatted_results)
     except Exception as e:
         return f"ERROR: Failed to retrieve top k code snippets: {str(e)}"
+
 
 def one_hop_api_retrieval(java_file_path: str, start_line: int, end_line: int, variable_name: str, bug_dict: BugDict) -> str:
     """
@@ -291,7 +287,7 @@ def one_hop_api_retrieval(java_file_path: str, start_line: int, end_line: int, v
         
         # Get APIs for the variable using get_apis_from_var
         # This function will first get the variable type, then retrieve APIs for that type
-        apis = functions.get_apis_from_var(joern_session, java_file_path, variable_name, bug_location, reference_checkout_dir)
+        apis = implementations.get_apis_from_var(joern_session, java_file_path, variable_name, bug_location, reference_checkout_dir)
         
         if not apis:
             return f"No APIs found for variable '{variable_name}' at bug location ({start_line}, {end_line}). The variable type may not be found or may not have any methods."
@@ -343,7 +339,7 @@ def get_callers(java_file_path: str, start_line: int, end_line: int, bug_dict, c
             return f"ERROR: Could not load CPG for project '{cpg_project_name}'. Make sure CPG is created first."
         
         # Get callers of the function at bug location
-        callers = functions.get_function_callers(joern_session, java_file_path, bug_location, class_name)
+        callers = implementations.get_function_callers(joern_session, java_file_path, bug_location, class_name)
         
         if not callers:
             return f"No callers found for function at bug location ({start_line}, {end_line})"

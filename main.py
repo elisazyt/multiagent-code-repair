@@ -37,7 +37,8 @@ from agents.prompt_templates import (
 import time
 
 ########################################################
-# TODO: change these for actually running, these are just the test paths
+# Note: These paths store everything under the test_results folder
+# The user can change these paths to point to other directories as desired
 ########################################################
 
 # path to folder containing chat_context, candidate_patches, final_patch, generated_patches
@@ -58,9 +59,14 @@ JOERN_WORKSPACE_PATH = os.path.join(project_root, "tests", "test_results", "exte
 # path to folder where Defects4J projects are checked out, tests are run, etc.
 DEFECTS4J_CHECKOUT_PATH = os.path.join(project_root, "tests", "test_results", "external_tools", "defects4j_checkouts")
 
-NUM_PATCHING_ROUNDS = 2
+# Number of patching attempts per agent, each attempt consists of calling the agent and testing the patch
+NUM_PATCHING_ATTEMPTS = 3
+# Number of context retrieval rounds per attempt, specifically for the ContextRetrievalAgent
+NUM_RETRIEVAL_ROUNDS = 2
+
 
 async def main():
+    print(f"Starting program...")
     start_time = time.perf_counter()
     runtime = SingleThreadedAgentRuntime()
 
@@ -97,10 +103,9 @@ async def main():
         joern_workspace_path=JOERN_WORKSPACE_PATH,
         defects4j_checkout_path=DEFECTS4J_CHECKOUT_PATH,
     )
-    # TODO: figure out what the path should be
     bug_dict.add_bug_locations([
         (
-            "org/apache/commons/math/optimization/general/AbstractLeastSquaresOptimizer.java",
+            "src/main/java/org/apache/commons/math/optimization/general/AbstractLeastSquaresOptimizer.java",
             [(240, 245), (258, 258)],
         ),
     ])
@@ -110,7 +115,9 @@ async def main():
     bm25_path = bug_dict.get_info("bm25 path")
     jsonl_dir = os.path.join(bm25_path, "jsonl")
     index_dir = os.path.join(bm25_path, "index")
-    # TODO: allow user to configure, these are default for now
+
+    # Default configs for BM25 search and UniXcoder retrieval. User can change the numerical configs
+    # as desired, depending on task complexity, model capabilities, cost/token restrictions, etc
     context_dict.add_bm25_rag_config(
         k_signatures=5,
         jsonl_dir=jsonl_dir,
@@ -148,6 +155,7 @@ async def main():
             context_dict=context_dict,
             bug_dict=bug_dict,
             agent_prompts=agent_prompts,
+            num_rounds=NUM_RETRIEVAL_ROUNDS,
         )
         context_agent_instance_ref = context_agent
         return context_agent
@@ -168,25 +176,24 @@ async def main():
     try:
         # Run all agents' loops in parallel
         # Note: Context retrieval will be run automatically when the context patching agent needs it
-        basic_rounds, cot_rounds, context_rounds, pattern_rounds = await asyncio.gather(
-            run_patch_test_loop("basic", admin_agent, runtime, num_rounds=NUM_PATCHING_ROUNDS),
-            run_patch_test_loop("cot", admin_agent, runtime, num_rounds=NUM_PATCHING_ROUNDS),
-            run_patch_test_loop("context", admin_agent, runtime, num_rounds=NUM_PATCHING_ROUNDS, context_dict=context_dict),
-            run_patch_test_loop("pattern", admin_agent, runtime, num_rounds=NUM_PATCHING_ROUNDS),
+        basic_attempts, cot_attempts, context_attempts, pattern_attempts = await asyncio.gather(
+            run_patch_test_loop("basic", admin_agent, runtime, num_attempts=NUM_PATCHING_ATTEMPTS),
+            run_patch_test_loop("cot", admin_agent, runtime, num_attempts=NUM_PATCHING_ATTEMPTS),
+            run_patch_test_loop("context", admin_agent, runtime, num_attempts=NUM_PATCHING_ATTEMPTS, context_dict=context_dict),
+            run_patch_test_loop("pattern", admin_agent, runtime, num_attempts=NUM_PATCHING_ATTEMPTS),
         )
 
         print(f"\nFinal results:")
-        print(f"Basic agent completed in {basic_rounds} rounds")
-        print(f"Cot agent completed in {cot_rounds} rounds")
-        print(f"Context agent completed in {context_rounds} rounds")
-        print(f"Pattern agent completed in {pattern_rounds} rounds")
+        print(f"Basic agent completed in {basic_attempts} attempts")
+        print(f"Cot agent completed in {cot_attempts} attempts")
+        print(f"Context agent completed in {context_attempts} attempts")
+        print(f"Pattern agent completed in {pattern_attempts} attempts")
 
         # All loops are done: select the best candidate among all the patches that passed all test suites
         selection_task = SelectionTask(
             candidate_patches=PatchingAgent.candidate_patches
         )
-        selection_response = await runtime.send_message(selection_task, recipient=admin_agent)
-        print(selection_response.selected_patch_description)
+        await runtime.send_message(selection_task, recipient=admin_agent)
     finally:
         elapsed_seconds = time.perf_counter() - start_time
         total_time = f"Total time taken: {elapsed_seconds:.1f} seconds"
@@ -209,7 +216,7 @@ async def main():
 
         await model_client.close()
         await runtime.stop_when_idle()
-        print(total_time)
+        print(f"Finished running program in {total_time} seconds")
 
 if __name__ == "__main__":
     asyncio.run(main())

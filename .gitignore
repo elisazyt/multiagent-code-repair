@@ -3,8 +3,6 @@ __pycache__/
 .DS_Store
 .env
 .java-version
-agents/tmp_documentation.txt
-agents/TODO_rag.py
-old_deprecated/
+to_be_deleted/
 TEMPLATE_test_results/
 tests/

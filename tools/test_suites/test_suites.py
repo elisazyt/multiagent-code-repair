@@ -6,7 +6,6 @@ from tools.test_suites import test_suites_helpers as tsh
 import tools.defects4j_utils as d4j_utils
 from tools.context_retrieval.parsing_retrieval_funcs import tree_sitter_utils as utils
 
-# Note that these all run in Java 11, which is handled in tools.defects4j_utils.get_java11_env()
 
 def run_defects4j_test(
     project_name: str,
@@ -52,16 +51,6 @@ def run_defects4j_test(
         cwd=agent_checkout_dir,
         env=d4j_utils.get_java11_env()
     )
-    # Debug: confirm the test command execution and surface key info
-    print(f"[DEBUG] Ran: defects4j test -w {agent_checkout_dir}")
-    print(f"[DEBUG] Return code: {result.returncode}")
-    if result.stderr:
-        print("[DEBUG] stderr (first 300 chars):")
-        print(result.stderr[:300])
-    if result.stdout:
-        # print only a small slice to avoid flooding the console
-        print("[DEBUG] stdout (first 300 chars):")
-        print(result.stdout[:300])
     
     # Parse the output to extract test results
     output = result.stdout
@@ -70,8 +59,7 @@ def run_defects4j_test(
     # If test command failed (return_code != 0), it likely means a compile error
     # Reset the checkout so it's clean for the next attempt
     if return_code != 0:
-        print(f"Test command failed (return code {return_code}). This likely indicates a compile error from the patch.")
-        print(f"Resetting checkout to clean state...")
+        print(f"[ERROR] run_defects4j_test: Test command failed (return code {return_code}). This likely indicates a compile error from the patch.")
         reset_success = tsh.reset_checkout(reference_dir, agent_checkout_dir)
         if not reset_success:
             return {'error': 'Failed to reset checkout after compile error'}
@@ -91,7 +79,7 @@ def run_defects4j_test(
         'failing_tests': failing_tests
     }
 
-# Call this function if success code is 0
+
 def get_failing_test_info(working_dir: str, project_name: str, failing_tests: List[str]) -> Tuple[str, List[Dict[str, str]]]:
     """
     Extract detailed information about failing tests.
@@ -108,25 +96,17 @@ def get_failing_test_info(working_dir: str, project_name: str, failing_tests: Li
     
     # Check if the failing_tests file exists
     if not os.path.exists(failing_tests_path):
-        print(f"[DEBUG] Warning: failing_tests file does not exist at {failing_tests_path}")
-        print(f"[DEBUG] This may happen if Defects4J didn't write the file (e.g., compile errors, or no detailed failure info)")
         # Return empty info for all tests
         info_for_each_test = {test_id: "" for test_id in failing_tests}
     else:
         failing_tests_info = subprocess.run(['cat', failing_tests_path], capture_output=True, text=True).stdout
         if not failing_tests_info:
-            print(f"[DEBUG] Warning: failing_tests file exists but is empty")
             info_for_each_test = {test_id: "" for test_id in failing_tests}
         else:
             info_for_each_test = tsh.get_each_failing_test_info(failing_tests, failing_tests_info)
 
     for test_identifier in failing_tests:
         test_info = info_for_each_test.get(test_identifier)
-        
-        # Debug: Check if test_info is empty
-        if not test_info:
-            print(f"[DEBUG] Test info is empty for: {test_identifier}")
-            print(f"[DEBUG] This means the test identifier was not found in the failing_tests file")
         
         failure_message = tsh.get_failure_message(test_info)
 
@@ -136,23 +116,6 @@ def get_failing_test_info(working_dir: str, project_name: str, failing_tests: Li
 
         package_path, method_name, line_number = tsh.get_failing_test_method_and_line(test_identifier, test_info)
         
-        # Debug: Check extraction results
-        if line_number == -1:
-            print(f"[DEBUG] Line number extraction failed for: {test_identifier}")
-            print(f"[DEBUG]   Package path: {package_path}")
-            print(f"[DEBUG]   Method name: {method_name}")
-            print(f"[DEBUG]   Test info length: {len(test_info) if test_info else 0}")
-            if test_info:
-                # Check if stack trace is in test_info
-                test_id_with_dots = test_identifier.replace('::', '.')
-                if f"at {test_id_with_dots}" in test_info:
-                    print(f"[DEBUG]   Stack trace line IS in test_info")
-                else:
-                    print(f"[DEBUG]   Stack trace line NOT in test_info")
-                    print(f"[DEBUG]   Looking for: 'at {test_id_with_dots}'")
-                    # Show first 200 chars of test_info
-                    print(f"[DEBUG]   Test info preview: {test_info[:200]}")
-        
         if (line_number != -1):
             test_path = tsh.get_full_test_path(project_name, working_dir, package_path)
 
@@ -161,15 +124,12 @@ def get_failing_test_info(working_dir: str, project_name: str, failing_tests: Li
             
             method_node = utils.retrieve_method_node_by_name(test_path, method_name)
             if method_node:
-                print(f"[DEBUG] Successfully found method '{method_name}' in {test_path}")
                 buggy_method = utils.get_node_text(method_node, code)
                 buggy_method_with_marker = tsh.mark_failing_line_in_method(
                     buggy_method, line_number, method_node.start_point[0] + 1
                 )
                 buggy_line = utils.retrieve_code_by_line_number(test_path, (line_number, line_number))
             else:
-                print(f"[DEBUG] Method '{method_name}' NOT found in {test_path}")
-                print(f"[DEBUG]   File exists: {os.path.exists(test_path)}")
                 buggy_method = "not found"
                 buggy_method_with_marker = "not found"
                 buggy_line = "not found"

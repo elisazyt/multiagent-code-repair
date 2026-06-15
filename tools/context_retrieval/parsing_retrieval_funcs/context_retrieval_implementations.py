@@ -1,5 +1,5 @@
 """
-Actual implementations of the context retrieval functions, defined in cr_functions.py
+Actual implementations of the context retrieval functions, defined in context_retrieval_functions.py
 """
 
 import json
@@ -21,7 +21,7 @@ from .joern_utils import (
     parse_joern_json_with_unescaped_quotes,
 )
 
-# Maps to conmment_retrieval
+
 def get_comments_before_node(java_file_path: str, node: Node) -> Node:
     """
     Retrieve the comment node right before a given node using tree-sitter.
@@ -76,15 +76,11 @@ def get_comments_before_node(java_file_path: str, node: Node) -> Node:
                     return comment
         
         return None
-        
-    except FileNotFoundError:
-        print(f"Error: File {java_file_path} not found")
-        return None
     except Exception as e:
-        print(f"Error reading file {java_file_path}: {e}")
+        print(f"[ERROR] get_comments_before_node hit an exception: {e}")
         return None
 
-# Maps to all_funcs_in_class
+
 def get_full_signatures_in_buggy_class(session: JoernSession, java_file_path: str, line_numbers: Tuple[int, int]) -> List[str]:
     """
     Get all function signatures in the buggy class.
@@ -101,11 +97,10 @@ def get_full_signatures_in_buggy_class(session: JoernSession, java_file_path: st
     if class_node:
         # Extract class name from tree-sitter node
         class_name = ib.extract_class_name_from_node(class_node, java_file_path)
-        print("class name:", class_name)
         
         # Step 2: Use class name in Joern query
         query = f'cpg.typeDecl.name("{class_name}").method.map(m => (m.name, m.fullName)).toJson'
-        stdout, _ = session._run_joern_query(query)
+        stdout, _ = session.run_joern_query(query)
         if not stdout:
             return []
         
@@ -148,17 +143,13 @@ def get_full_signatures_in_buggy_class(session: JoernSession, java_file_path: st
                         method_signatures.extend(item.values())
             
             return method_signatures
-            
-        except json.JSONDecodeError as e:
-            print(f"Error parsing JSON: {e}")
-            return []
         except Exception as e:
-            print(f"Error processing output: {e}")
+            print(f"[ERROR] get_full_signatures_in_buggy_class hit an exception: {e}")
             return []
     
     return []
 
-# Maps to one_hop_api_retrieval
+
 def get_apis_from_var(session: JoernSession, java_file_path: str, var_name: str, line_numbers: Tuple[int, int], reference_checkout_dir: str) -> List[str]:
     """
     Get all APIs (methods) available for a variable by first getting its type, then retrieving APIs for that type.
@@ -176,13 +167,13 @@ def get_apis_from_var(session: JoernSession, java_file_path: str, var_name: str,
     variable_type = get_buggy_variable_type(session, java_file_path, var_name, line_numbers)
     
     if variable_type is None:
-        print(f"ERROR: Could not determine type for variable '{var_name}' at lines {line_numbers}")
+        print(f"[ERROR] get_apis_from_var: Could not determine type for variable '{var_name}' at lines {line_numbers}")
         return []
     
     # Then, get APIs for that type
     return get_apis_from_var_type(variable_type, reference_checkout_dir)
 
-# Maps to get_callers
+
 def get_function_callers(session: JoernSession, java_file_path: str, line_numbers: Tuple[int, int], class_name: str) -> List[Tuple[int, str]]:
     """
     Get all function callers of a given function.
@@ -200,20 +191,14 @@ def get_function_callers(session: JoernSession, java_file_path: str, line_number
     
     method_signature = get_full_method_signature_from_line_numbers(session, java_file_path, line_numbers, class_name)
     if not method_signature:
-        print(f"DEBUG get_function_callers: Could not find method signature for {java_file_path} at lines {line_numbers} with class_name {class_name}")
         return []
-    
-    print(f"DEBUG get_function_callers: Found method signature: {method_signature}")
 
     # Find calls to this method and get the line number where the call occurs
     # Search entire project for callers (callers can be in any file)
     query = f'cpg.call.filter(call => call.methodFullName == "{method_signature}").map(call => (call.lineNumber.get, call.code)).toJson'
 
-    stdout, stderr = session._run_joern_query(query)
-    if stderr:
-        print(f"DEBUG get_function_callers stderr: {stderr}")
+    stdout, _ = session.run_joern_query(query)
     if not stdout:
-        print(f"DEBUG get_function_callers: No stdout. Query was: {query}")
         return []
     
     try:
@@ -232,25 +217,19 @@ def get_function_callers(session: JoernSession, java_file_path: str, line_number
                 # Handle both single and double quotes
                 while (json_str.startswith('"') and json_str.endswith('"')) or (json_str.startswith("'") and json_str.endswith("'")):
                     json_str = json_str[1:-1]
-                print(f"DEBUG get_function_callers: Extracted from 'val res' pattern: {json_str[:100]}")
                 break
             # Also try pattern 2: lines that start with "[" (JSON array)
             elif line_clean.strip().startswith('[') and line_clean.strip().endswith(']'):
                 json_str = line_clean.strip()
-                print(f"DEBUG get_function_callers: Extracted from '[' pattern: {json_str[:100]}")
                 break
         
         if not json_str:
-            print(f"DEBUG get_function_callers: No JSON found. stdout was:\n{stdout[:500]}")
             return []
-        
-        print(f"DEBUG get_function_callers: JSON string (first 500 chars): {json_str[:500]}")
         
         # Parse the JSON (handles unescaped quotes in code strings)
         data = parse_joern_json_with_unescaped_quotes(json_str)
         if data is None:
-            print(f"Warning: Could not parse callers JSON, returning empty list")
-            print(f"DEBUG: Full JSON string that failed: {json_str}")
+            print(f"[ERROR] Could not parse the following JSON string in get_function_callers: {json_str}")
             return []
         
         # If data is still a string, try parsing it again
@@ -267,127 +246,8 @@ def get_function_callers(session: JoernSession, java_file_path: str, line_number
                     code = caller['_2']
                     if line_number:
                         callers.append((line_number, code if code else ""))
-        else:
-            print(f"Expected list but got {type(data)}")
         
         return callers
-        
-    except json.JSONDecodeError as e:
-        print(f"Error parsing JSON: {e}")
-        print(f"JSON string that failed: {json_str}")
-        return []
     except Exception as e:
-        print(f"Error processing output: {e}")
+        print(f"[ERROR] get_function_callers hit an exception: {e}")
         return []
-
-
-
-# TODO: Implement data flow analysis functions
-
-"""
-# TODO: delete this if we decide we no longer need
-def get_callees_in_line_range(session: JoernSession, java_file_path: str, line_numbers: Tuple[int, int], class_name: str) -> List[str]:
-    if not session.project_name:
-        raise RuntimeError("No project loaded. Call load_cpg() first.")
-    
-    start_line, end_line = line_numbers
-    
-    # Get all method calls directly within the specific line range
-    # Filter out operators (they start with "<operator>.") to only get actual method calls
-    # Filter by class name in file path
-    query = f'cpg.call.filter(call => call.lineNumber.isDefined && call.lineNumber.get >= {start_line} && call.lineNumber.get <= {end_line} && !call.name.startsWith("<operator>") && call.file.name.filter(_.endsWith("{class_name}.java")).nonEmpty).map(call => call.name).toJson'
-    
-    stdout, stderr = session._run_joern_query(query)
-    if stderr:
-        print(f"DEBUG get_callees_in_line_range stderr: {stderr}")
-    if not stdout:
-        return []
-    
-    try:
-        # Extract JSON string from Joern output
-        lines = stdout.strip().split('\n')
-        json_str = None
-        
-        # Try multiple patterns to find the JSON output
-        for line in lines:
-            # Strip ANSI color codes
-            line_clean = re.sub(r'\x1b\[[0-9;]*m', '', line)
-            
-            # Pattern 1: "val resX: String = ..."
-            if 'val res' in line_clean and 'String = ' in line_clean:
-                json_start = line_clean.find('String = ') + 8
-                json_str = line_clean[json_start:].strip()
-                break
-            # Pattern 2: Look for lines that start with "[" (JSON array)
-            elif line_clean.strip().startswith('[') and line_clean.strip().endswith(']'):
-                json_str = line_clean.strip()
-                break
-            # Pattern 3: Look for lines containing JSON-like structure
-            elif ('[' in line_clean and '{' in line_clean and '_1' in line_clean):
-                # Try to extract JSON from this line
-                # Find the JSON array part
-                start_idx = line_clean.find('[')
-                end_idx = line_clean.rfind(']') + 1
-                if start_idx >= 0 and end_idx > start_idx:
-                    json_str = line_clean[start_idx:end_idx]
-                break
-        
-        if not json_str:
-            print(f"DEBUG get_callees_in_line_range: No JSON found. stdout was:\n{stdout[:500]}")
-            return []
-        
-        # Remove any extra quotes at the beginning and end
-        # Handle both single and double quotes
-        while (json_str.startswith('"') and json_str.endswith('"')) or (json_str.startswith("'") and json_str.endswith("'")):
-            json_str = json_str[1:-1]
-        
-        # Handle escaped quotes within the string
-        json_str = json_str.replace('\\"', '"')
-        
-        # Try to parse the JSON (handles unescaped quotes in code strings)
-        data = parse_joern_json_with_unescaped_quotes(json_str)
-        if data is None:
-            print(f"Failed to parse JSON. JSON string was: {json_str[:200]}")
-            return []
-        
-        # If data is still a string, try parsing it again
-        if isinstance(data, str):
-            try:
-                data = json.loads(data)
-            except json.JSONDecodeError:
-                print(f"Failed to parse JSON string. JSON string was: {json_str[:200]}")
-                return []
-        
-        method_names = []
-        if isinstance(data, list):
-            for item in data:
-                # Joern returns strings directly when mapping to call.name
-                if isinstance(item, str):
-                    if item:  # Only add non-empty strings
-                        method_names.append(item)
-                elif isinstance(item, dict) and '_1' in item:
-                    # Handle tuple format (backward compatibility if query returns tuples)
-                    method_name = item['_1']
-                    if method_name:
-                        method_names.append(method_name)
-        else:
-            print(f"Expected list but got {type(data)}: {data}")
-        
-        # Remove duplicates while preserving order
-        seen = set()
-        unique_method_names = []
-        for name in method_names:
-            if name not in seen:
-                seen.add(name)
-                unique_method_names.append(name)
-        
-        return unique_method_names
-        
-    except json.JSONDecodeError as e:
-        print(f"Error parsing JSON: {e}")
-        print(f"Raw output: {stdout}")
-        return []
-    except Exception as e:
-        print(f"Error processing output: {e}")
-        return []
-"""
