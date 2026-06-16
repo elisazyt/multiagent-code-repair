@@ -56,14 +56,6 @@ logic, then identify issues that could cause the code to fail or produce incorre
 correcting the identified bugs, and add detailed comments explaining the changes you made and why they address the
 issues."""
 
-# TODO: remove?
-API_PROMPT = f"""
-You are an agent that retrieves and uses any necessary APIs to carry out the task given by the system
-description. Some bug fixes don't require API usage, so you should first analyze the context and determine
-if new APIs are needed.
-
-Whenever possible, use the retrieved APIs instead of creating your own functions."""
-
 CONTEXT_PROMPT = "Generate a patch for the buggy Java code using all the context information provided."
 
 # TODO: update as needed, figure out how to provide this info to agent using methods other than natural language?
