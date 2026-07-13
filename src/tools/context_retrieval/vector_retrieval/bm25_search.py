@@ -8,7 +8,7 @@ from pyserini.search.lucene import LuceneSearcher
 parent_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
-from agents.data_structures.dicts import BugDict, ContextDict
+from src.agents.data_structures.dicts import BugDict, ContextDict
 from . import bm25_utils as utils
 
 

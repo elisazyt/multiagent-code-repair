@@ -2,7 +2,12 @@ __pycache__/
 *.pyc
 .DS_Store
 .env
-.java-version
 to_be_deleted/
 TEMPLATE_test_results/
 tests/
+results/
+
+.vscode
+
+# docker stuff
+README.Docker.md

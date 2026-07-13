@@ -2,9 +2,9 @@ import os
 import subprocess
 from typing import List, Dict, Tuple
 
-from tools.test_suites import test_suites_helpers as tsh
-import tools.defects4j_utils as d4j_utils
-from tools.context_retrieval.parsing_retrieval_funcs import tree_sitter_utils as utils
+from src.tools.test_suites import test_suites_helpers as tsh
+import defects4j_utils as d4j_utils
+from src.tools.context_retrieval.parsing_retrieval_funcs import tree_sitter_utils as utils
 
 
 def run_defects4j_test(

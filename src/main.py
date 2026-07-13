@@ -4,11 +4,11 @@ import sys
 from autogen_core import AgentId, SingleThreadedAgentRuntime
 from autogen_ext.models.openai import OpenAIChatCompletionClient
 
-project_root = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from agents.agents import (
+from src.agents.agents import (
     AdminAgent,
     PatchingAgent,
     TestingAgent,
@@ -16,14 +16,14 @@ from agents.agents import (
     SummaryAgent,
     SelectionAgent,
 )
-from agents.helpers.agent_helpers import run_patch_test_loop, save_all_message_threads
-from agents.data_structures.data_classes import SelectionTask
-from agents.data_structures.dicts import BugDict, ContextDict
+from src.agents.helpers.agent_helpers import run_patch_test_loop, save_all_message_threads
+from src.agents.data_structures.data_classes import SelectionTask
+from src.agents.data_structures.dicts import BugDict, ContextDict
 
 # Note: these can be changed, but note that there are some parts of the prompt enclosed by {} which
 # are placeholders for content that will be filled in when the agent is initialized
 # Changing the prompt may break the program if the placeholders can't be correctly populated
-from agents.prompt_templates import (
+from src.agents.prompt_templates import (
     PATCHING_SYSTEM_PROMPT,
     BASIC_PROMPT,
     COT_PROMPT,
@@ -35,34 +35,29 @@ from agents.prompt_templates import (
 )
 
 import time
-
-########################################################
-# Note: These paths store everything under the test_results folder
-# The user can change these paths to point to other directories as desired
-########################################################
-
-# path to folder containing chat_context, candidate_patches, final_patch, generated_patches
-RESULTS_PATH = os.path.join(project_root, "tests", "test_results")
-
-# path to folder containing bm25 index and corresponding jsonl file
-BM25_PATH = os.path.join(project_root, "tests", "test_results", "external_tools", "bm25_indexes")
-
+"""
+User-specified variables (via CLI arguments, otherwise use default):
+"""
+# one root folder with all the results that the user should specify. default is a folder in this repo
+RESULTS_ROOT = os.path.join(project_root, "results")
 # path to Joern executable
 JOERN_EXECUTABLE = "/opt/homebrew/bin/joern"
-
-# directory Joern runs from
-JOERN_WORKING_DIR = os.path.dirname(os.path.realpath(JOERN_EXECUTABLE))
-
-# path to folder containing Joern workspace for CPG generation/storage
-JOERN_WORKSPACE_PATH = os.path.join(project_root, "tests", "test_results", "external_tools", "joern_workspace")
-
-# path to folder where Defects4J projects are checked out, tests are run, etc.
-DEFECTS4J_CHECKOUT_PATH = os.path.join(project_root, "tests", "test_results", "external_tools", "defects4j_checkouts")
-
 # Number of patching attempts per agent, each attempt consists of calling the agent and testing the patch
 NUM_PATCHING_ATTEMPTS = 3
 # Number of context retrieval rounds per attempt, specifically for the ContextRetrievalAgent
 NUM_RETRIEVAL_ROUNDS = 2
+
+"""
+Construct all remaining paths, which are all subfolders of RESULTS_ROOT:
+"""
+# path to folder containing bm25 index and corresponding jsonl file
+BM25_PATH = os.path.join(RESULTS_ROOT, "external_tools", "bm25_indexes")
+# directory Joern runs from
+JOERN_WORKING_DIR = os.path.dirname(os.path.realpath(JOERN_EXECUTABLE))
+# path to folder containing Joern workspace for CPG generation/storage
+JOERN_WORKSPACE_PATH = os.path.join(RESULTS_ROOT, "external_tools", "joern_workspace")
+# path to folder where Defects4J projects are checked out, tests are run, etc.
+DEFECTS4J_CHECKOUT_PATH = os.path.join(RESULTS_ROOT, "external_tools", "defects4j_checkouts")
 
 
 async def main():
@@ -83,7 +78,7 @@ async def main():
         "selection": [AgentId("selection", "selection")],
     }
 
-    # Create model client for PatchingAgent
+    # Create model client (shared across all agents)
     model_client = OpenAIChatCompletionClient(
         model=os.environ.get("GPT_MODEL", "gpt-4o-mini"),
         api_key=os.environ.get("OPENAI_API_KEY"),
@@ -96,7 +91,7 @@ async def main():
     bug_dict = BugDict()
     bug_dict.add_project_info(project_name, bug_id)
     bug_dict.add_paths(
-        results_path=RESULTS_PATH,
+        results_path=RESULTS_ROOT,
         bm25_path=BM25_PATH,
         joern_executable=JOERN_EXECUTABLE,
         joern_working_dir=JOERN_WORKING_DIR,
@@ -195,9 +190,6 @@ async def main():
         )
         await runtime.send_message(selection_task, recipient=admin_agent)
     finally:
-        elapsed_seconds = time.perf_counter() - start_time
-        total_time = f"Total time taken: {elapsed_seconds:.1f} seconds"
-
         # Regardless of whether the program ran all the way to completion, store the latest
         # message threads for each agent
         await save_all_message_threads(
@@ -206,17 +198,29 @@ async def main():
             context_agent_instance=context_agent_instance_ref,
         )
 
-        # At the end of admin agent's chat messages, add the total time taken to run the whole program
+        # Calculate total time
+        elapsed_seconds = time.perf_counter() - start_time
+        total_time = f"Total time taken: {elapsed_seconds:.1f} seconds"
+        # Calculate token usage. Note that model_client is shared across all agents, so prompt_tokens
+        # and completion_tokens are already the sum of the individual token usages across all agent instances
+        usage = model_client.total_usage()
+        total_tokens = usage.prompt_tokens + usage.completion_tokens
+
+        # At the end of admin agent's chat messages, add the time and token usage
         admin_log_path = os.path.join(
             bug_dict.get_info("chat context path"),
             f"{bug_dict.get_info('project name')}{bug_dict.get_info('bug id')}_admin_agent.txt",
         )
         with open(admin_log_path, "a", encoding="utf-8") as f:
             f.write(f"{total_time}\n")
+            f.write(
+                f"Total tokens used: {total_tokens} "
+                f"(prompt: {usage.prompt_tokens}, completion: {usage.completion_tokens})\n"
+            )
 
         await model_client.close()
         await runtime.stop_when_idle()
-        print(f"Finished running program in {total_time} seconds")
+        print(f"Finished running program in {total_time} seconds. Used {total_tokens} total tokens")
 
 if __name__ == "__main__":
     asyncio.run(main())
