@@ -11,7 +11,7 @@ from .joern_session import JoernSession
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
-from . import defects4j_utils as d4j_utils
+import defects4j_utils as d4j_utils
 
 
 def parse_joern_json_with_unescaped_quotes(json_str: str) -> Optional[list]:

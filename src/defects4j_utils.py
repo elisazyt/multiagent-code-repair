@@ -1,36 +1,54 @@
 """
 Helper functions for running Defects4J commands
+
+- Defects4J API reference: https://defects4j.org/html_doc/index.html
 """
 
 import os
+import shutil
 import subprocess
 
 
-def checkout_defects4j_project(project_name: str, bug_id: str, checkout_dir: str) -> bool:
-    """Checkout the buggy version of a Defects4J project.
+def checkout_defects4j_project(project_name: str, bug_id: str, checkout_dir: str, buggy: bool) -> bool:
+    """
+    Checkout the buggy version of a Defects4J project.
     Can specify any arbirary checkout_dir, for this project we always checkout to the reference directory
     
     Parameters:
     - project_name (str): Project name (e.g., 'Chart', 'Closure', 'Lang')
-    - bug_id (str): Bug ID (e.g., '2', '3', '4') - will be converted to '2b', '3b', etc.
+    - bug_id (str): Bug ID (e.g., '2', '3', '4')
     - checkout_dir (str): Exact directory to checkout the project to
+    - buggy (bool): Specifies whether to check out the buggy or fixed version
     
     Returns:
     - bool: True if checkout succeeded or already exists, False otherwise
     """
     try:
-        result = subprocess.run(
-            ['defects4j', 'checkout', '-p', project_name, '-v', bug_id + 'b', '-w', checkout_dir],
-            capture_output=True,
-            text=True,
-            env=get_java11_env()
-        )
+        if buggy:
+            version_id = bug_id + 'b'
+        else:
+            version_id = bug_id + 'f'
 
+        def run_checkout():
+            return subprocess.run(
+                    ['defects4j', 'checkout', '-p', project_name, '-v', version_id, '-w', checkout_dir],
+                    capture_output=True,
+                    text=True,
+                    env=get_java11_env()
+                )
+
+        result = run_checkout()
         if result.returncode == 0:
             return True
-        else:
-            return False
-            
+
+        # Checkout can fail if checkout_dir already contains a stale/corrupted checkout
+        # (e.g. from a previous run that crashed mid-checkout). Wipe it and retry once.
+        if os.path.exists(checkout_dir):
+            shutil.rmtree(checkout_dir)
+            os.makedirs(checkout_dir, exist_ok=True)
+        result = run_checkout()
+        return result.returncode == 0
+
     except Exception as e:
         print(f"[ERROR] checkout_defects4j_project hit an exception: {e}")
         return False

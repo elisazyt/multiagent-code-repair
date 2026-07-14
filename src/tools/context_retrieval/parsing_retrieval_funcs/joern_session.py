@@ -6,7 +6,7 @@ from typing import Optional, Tuple
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
-from . import defects4j_utils as d4j_utils
+import defects4j_utils as d4j_utils
 
 
 class JoernSession:
@@ -56,7 +56,7 @@ class JoernSession:
             
             # Checkout Defects4J project (will skip if already exists)
             success = d4j_utils.checkout_defects4j_project(
-                project_name, bug_id, reference_checkout_dir
+                project_name, bug_id, reference_checkout_dir, buggy=True
             )
             if not success:
                 print(f"[ERROR] create_cpg_from_defects4j: Failed to checkout Defects4J project")

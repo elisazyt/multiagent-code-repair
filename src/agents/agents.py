@@ -4,6 +4,7 @@ Classes for Admin, Patching, Testing, Context Retrieval, Selection, and Summary 
 """
 
 import os
+import re
 import shutil
 import sys
 from autogen_core import AgentId, MessageContext, RoutedAgent, message_handler
@@ -482,7 +483,7 @@ class TestingAgent(RoutedAgent):
                 failing_test_info_string += 'Error: Test command did not run. Check for possible errors such as undefined function calls, API usage without importation, compile errors, etc.'
             if len(test_result['failing_tests']) > 0:
                 all_tests_passed = False
-                test_info_string, test_info_list = ts.get_failing_test_info(agent_checkout_dir, project_name, test_result['failing_tests'])
+                test_info_string, test_info_list = ts.get_failing_test_info(agent_checkout_dir, test_result['failing_tests'])
                 failing_test_info_string += test_info_string
                 failing_test_info_string += '\n'
 
@@ -850,11 +851,15 @@ class SelectionAgent(RoutedAgent):
             await self.chat_messages.add_message(assistant_message)
 
             # Parse the best agent: the first line should be exactly one of (basic, context...)
-            first_line = result_text.strip().splitlines()[0].strip().strip("\"'`")
-            if first_line in candidate_agent_names:
-                selected_agent_name = first_line
-            else:
-                return SelectionResponse(selected_patch_description=f"Could not parse first line '{first_line}' as a patcher id.")
+            selected_agent_name = self.parse_patcher_id(result_text, candidate_agent_names)
+            if selected_agent_name is None:
+                # Could not parse a patcher id at all: fall back to the first candidate patch,
+                # since any candidate here has already passed all test suites.
+                selected_agent_name = candidate_agent_names[0]
+                print(
+                    f"[WARN] SelectionAgent: Could not parse a patcher id from response, "
+                    f"falling back to first candidate: {selected_agent_name}"
+                )
 
         # Save the selected agent's full patched files under the final patch folder
         final_patch_info = next(patch_info for patch_info in candidate_patches if patch_info["patcher id"] == selected_agent_name)
@@ -865,6 +870,27 @@ class SelectionAgent(RoutedAgent):
         final_patch_description += f"\nFinal patch location: {self.bug_dict.get_info('final patch path')}"
 
         return SelectionResponse(selected_patch_description=final_patch_description)
+
+    def parse_patcher_id(self, result_text: str, candidate_agent_names: list[str]) -> str | None:
+        """
+        Parse the selected patcher id out of the LLM's response, falling back progressively
+        if it doesn't follow the expected "first line is exactly the patcher id" format.
+
+        Returns the matched patcher id, or None if not found.
+        """
+        first_line = result_text.strip().splitlines()[0].strip()
+
+        # First strip quotes and common symbols from the first line, then check exact match
+        cleaned_first_line = first_line.strip("\"'`").lstrip("-*").strip()
+        cleaned_first_line = re.sub(r'^\d+[\.\)]\s*', '', cleaned_first_line).strip()
+        if cleaned_first_line in candidate_agent_names:
+            return cleaned_first_line
+
+        # If still no exact match, try to extract a candidate agent name from anywhere in the text
+        return next(
+            (name for name in candidate_agent_names if re.search(rf'\b{re.escape(name)}\b', result_text)),
+            None,
+        )
 
     def format_candidates(self, candidate_patches: list) -> str:
         """

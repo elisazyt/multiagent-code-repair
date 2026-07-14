@@ -23,7 +23,7 @@ from src.agents.data_structures.dicts import BugDict, ContextDict
 # Note: these can be changed, but note that there are some parts of the prompt enclosed by {} which
 # are placeholders for content that will be filled in when the agent is initialized
 # Changing the prompt may break the program if the placeholders can't be correctly populated
-from src.agents.prompt_templates import (
+from agents.prompts import (
     PATCHING_SYSTEM_PROMPT,
     BASIC_PROMPT,
     COT_PROMPT,
@@ -46,6 +46,10 @@ JOERN_EXECUTABLE = "/opt/homebrew/bin/joern"
 NUM_PATCHING_ATTEMPTS = 3
 # Number of context retrieval rounds per attempt, specifically for the ContextRetrievalAgent
 NUM_RETRIEVAL_ROUNDS = 2
+
+# project name and bug id to patch
+PROJECT_NAME = "Math"
+BUG_ID = "99"
 
 """
 Construct all remaining paths, which are all subfolders of RESULTS_ROOT:
@@ -84,12 +88,10 @@ async def main():
         api_key=os.environ.get("OPENAI_API_KEY"),
     )
 
-    # Create BugDict for Closure 3 bug (shared by all patching agents)
-    project_name = "Math"
-    bug_id = "65"
+    # Create BugDict for the given bug (shared by all patching agents)
 
     bug_dict = BugDict()
-    bug_dict.add_project_info(project_name, bug_id)
+    bug_dict.add_project_info(PROJECT_NAME, BUG_ID)
     bug_dict.add_paths(
         results_path=RESULTS_ROOT,
         bm25_path=BM25_PATH,
@@ -98,12 +100,7 @@ async def main():
         joern_workspace_path=JOERN_WORKSPACE_PATH,
         defects4j_checkout_path=DEFECTS4J_CHECKOUT_PATH,
     )
-    bug_dict.add_bug_locations([
-        (
-            "src/main/java/org/apache/commons/math/optimization/general/AbstractLeastSquaresOptimizer.java",
-            [(240, 245), (258, 258)],
-        ),
-    ])
+    bug_dict.add_bug_locations()
 
     # Create ContextDict initialized from BugDict
     context_dict = ContextDict(bug_dict=bug_dict)

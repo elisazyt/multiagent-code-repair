@@ -1,5 +1,6 @@
 import os
 import shutil
+from pathlib import Path
 
 
 def reset_checkout(reference_dir: str, agent_checkout_dir: str) -> bool:
@@ -31,31 +32,24 @@ def apply_java_file_patch(java_file: str, target_file_path: str):
         return False
 
 
-def get_full_source_path(project_name: str, working_dir: str, modified_source: str):
+def get_full_source_path(working_dir: str, modified_source: str) -> str | None:
     """
-    Construct the target_java_path by combining connecting path with modified source.
-    
+    Locate the full path to a modified source file by globbing working_dir for a file
+    matching modified_source's package path.
+
     Parameters:
-    - project_name: Project name (e.g., 'Chart', 'Closure', 'Math')
+    - working_dir: Working directory (e.g., .../Closure3/basic)
     - modified_source: Modified source from Defects4J (e.g., 'org.apache.commons.math3.dfp.Dfp')
-    
+
     Returns:
-    - str: Full target_java_path relative to working_dir
+    - str: Full path to the source file, or None if not found
     """
-
-    # Get the connecting path for this project
-    paths = {
-        'chart': 'source',
-        'closure': 'src',
-        'mockito': 'src', 
-        'math': 'src/main/java',
-        'lang': 'src/main/java',
-        'time': 'src/main/java'
-    }
-
-    # Combine connecting path with file path
-    full_source_path = connect_paths(project_name, working_dir, paths, modified_source)
-    return full_source_path
+    relative_suffix = Path(modified_source.replace('.', os.sep) + '.java')
+    matches = list(Path(working_dir).rglob(relative_suffix.name))
+    for match in matches:
+        if match.as_posix().endswith(relative_suffix.as_posix()):
+            return str(match)
+    return None
 
 
 def get_each_failing_test_info(failing_tests: list[str], failing_tests_info: str) -> dict[str, str]:
@@ -105,29 +99,24 @@ def get_failure_message(test_info: str) -> str:
     return ""  # Return empty string if not found
 
 
-def get_full_test_path(project_name: str, working_dir: str, test_package_path: str) -> str:
+def get_full_test_path(working_dir: str, test_package_path: str) -> str | None:
     """
-    Construct the full path to the test file
-    
+    Locate the full path to a test file by globbing working_dir for a file matching
+    test_package_path's package path.
+
     Parameters:
-    - project_name: Project name (e.g., 'Chart', 'Closure', 'Math')
     - working_dir: Working directory (e.g., .../Closure3/basic)
     - test_package_path: Given by the test identifier, but without the method name
+
+    Returns:
+    - str: Full path to the test file, or None if not found
     """
-
-    # Get the connecting path for this project
-    paths = {
-        'chart': 'tests',
-        'closure': 'test',
-        'mockito': 'test', 
-        'math': 'src/test/java',
-        'lang': 'src/test/java',
-        'time': 'src/test/java'
-    }
-
-    # Combine connecting path with file path
-    full_test_path = connect_paths(project_name, working_dir, paths, test_package_path)
-    return full_test_path
+    relative_suffix = Path(test_package_path.replace('.', os.sep) + '.java')
+    matches = list(Path(working_dir).rglob(relative_suffix.name))
+    for match in matches:
+        if match.as_posix().endswith(relative_suffix.as_posix()):
+            return str(match)
+    return None
 
 
 def get_failing_test_method_and_line(test_identifier: str, failing_test_info: str) -> tuple[str, str, int]:
@@ -197,20 +186,3 @@ def mark_failing_line_in_method(method_code: str, failing_line_number: int, meth
             result_lines.append(f"{absolute_line:4d}     {line}")
     
     return '\n'.join(result_lines)
-
-
-def connect_paths(project_name: str, working_dir: str, paths: dict[str, str], package_path: str):
-    """
-    Parameters:
-    - project_name: e.g. 'Chart', 'Closure', 'Math'
-    - working_dir: Working directory (e.g., .../Closure3/basic)
-    - paths: dictionary specifying the connecting path for each project
-    - package_path: Package path (e.g., 'org.mockito.internal.util.TimerTest')
-
-    Returns:
-    - str: Full path to the test file
-    """
-    connecting_path = paths.get(project_name.lower())
-    file_path = package_path.replace('.', '/') + '.java'
-    full_path = os.path.join(working_dir, connecting_path, file_path)
-    return full_path

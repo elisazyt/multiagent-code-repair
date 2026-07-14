@@ -2,10 +2,9 @@
 BugDict stores general bug-related info, 
 """
 
-from typing import List, Tuple
 import os
 
-from src.agents.data_structures import bugdict_helpers as helpers
+from src.agents.helpers.fault_localization import find_bug_locations
 import defects4j_utils as d4j_utils
 
 
@@ -33,30 +32,6 @@ class BugDict:
         """
         self.add_info("project name", project_name)
         self.add_info("bug id", bug_id)
-
-    def add_bug_locations(
-        self,
-        bug_locations: List[Tuple[str, List[Tuple[int, int]]]],
-    ):
-        """
-        - Bug locations are a list of tuples, each containing a path to a Java file (relative to
-          the Defects4J reference checkout) and a list of line ranges.
-        - We store the absolute file path, the modified source name, and the list of line numbers.
-        """
-        enriched_bug_locations = []
-        for java_file_path, bug_locations_list in bug_locations:
-            # get the absolute path to the Java file
-            reference_checkout_path = self.get_info("defects4j reference checkout path")
-            absolute_file_path = os.path.abspath(os.path.join(reference_checkout_path, java_file_path))
-            modified_source_name = helpers.get_modified_source(absolute_file_path)
-            if modified_source_name:
-                enriched_bug_locations.append((absolute_file_path, modified_source_name, bug_locations_list))
-            else:
-                # Fallback: use filename if extraction fails, we should ideally never reach this point
-                filename = os.path.basename(absolute_file_path).replace('.java', '')
-                enriched_bug_locations.append((absolute_file_path, filename, bug_locations_list))
-
-        self.add_info("bug files and locations", enriched_bug_locations)
 
     def add_paths(
         self,
@@ -118,12 +93,25 @@ class BugDict:
         # Perform the checkout
         project_name = self.get_info("project name")
         bug_id = self.get_info("bug id")
-        if not d4j_utils.checkout_defects4j_project(project_name, bug_id, reference_checkout_dir):
+        if not d4j_utils.checkout_defects4j_project(project_name, bug_id, reference_checkout_dir, buggy=True):
             raise RuntimeError(f"Failed to checkout reference at {reference_checkout_dir}")
 
         joern_project_workspace_dir = os.path.join(os.path.abspath(joern_workspace_path), label)
         os.makedirs(joern_project_workspace_dir, exist_ok=True)
         self.add_info("joern workspace path", joern_project_workspace_dir)
+
+    def add_bug_locations(self):
+        """
+        - Bug locations are derived automatically by diffing the buggy checkout against the
+          fixed checkout (see find_bug_locations), giving a list of tuples each containing a
+          path to a Java file (relative to the Defects4J reference checkout) and a list of
+          line ranges.
+        - We store the absolute file path, the modified source name, and the list of line numbers.
+        - Requires add_project_info and add_paths to have both been called first.
+        """
+        bug_locations = find_bug_locations(self.get_info("project name"), self.get_info("bug id"), \
+                                           self.get_info("defects4j reference checkout path"))
+        self.add_info("bug files and locations", bug_locations)
 
     def add_info(self, info_type, info):
         self.info_dict[info_type] = info

@@ -36,7 +36,7 @@ def run_defects4j_test(
     # Apply all patches first
     modified_sources = d4j_utils.get_modified_sources(project_name, bug_id)
     for modified_source in modified_sources:
-        full_source_path = tsh.get_full_source_path(project_name, agent_checkout_dir, modified_source)
+        full_source_path = tsh.get_full_source_path(agent_checkout_dir, modified_source)
         
         if modified_source not in java_patch_files:
             return {'error': f'Missing mapping for modified source: {modified_source}'}
@@ -80,7 +80,7 @@ def run_defects4j_test(
     }
 
 
-def get_failing_test_info(working_dir: str, project_name: str, failing_tests: List[str]) -> Tuple[str, List[Dict[str, str]]]:
+def get_failing_test_info(working_dir: str, failing_tests: List[str]) -> Tuple[str, List[Dict[str, str]]]:
     """
     Extract detailed information about failing tests.
 
@@ -117,7 +117,7 @@ def get_failing_test_info(working_dir: str, project_name: str, failing_tests: Li
         package_path, method_name, line_number = tsh.get_failing_test_method_and_line(test_identifier, test_info)
         
         if (line_number != -1):
-            test_path = tsh.get_full_test_path(project_name, working_dir, package_path)
+            test_path = tsh.get_full_test_path(working_dir, package_path)
 
             with open(test_path, 'rb') as f:
                 code = f.read()
