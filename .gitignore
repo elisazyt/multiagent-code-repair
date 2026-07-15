@@ -2,12 +2,6 @@ __pycache__/
 *.pyc
 .DS_Store
 .env
-to_be_deleted/
-results/
-actual_results/
-
+tests
 .vscode
-
-# docker stuff
-README.Docker.md
 main.sh

@@ -27,7 +27,7 @@ from src.agents.data_structures.dicts import BugDict, ContextDict
 # Note: these can be changed, but note that there are some parts of the prompt enclosed by {} which
 # are placeholders for content that will be filled in when the agent is initialized
 # Changing the prompt may break the program if the placeholders can't be correctly populated
-from agents.prompts import (
+from src.agents.prompts import (
     PATCHING_SYSTEM_PROMPT,
     BASIC_PROMPT,
     COT_PROMPT,
