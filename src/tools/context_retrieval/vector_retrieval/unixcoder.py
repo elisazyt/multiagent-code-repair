@@ -81,12 +81,17 @@ class UniXcoder(nn.Module):
             predictions.append(prediction)
         return predictions
     
-    def forward(self, source_ids):   
+    def forward(self, source_ids):
         """ Obtain token embeddings and sentence embeddings """
         mask = source_ids.ne(self.config.pad_token_id)
-        token_embeddings = self.model(source_ids,attention_mask = mask.unsqueeze(1) * mask.unsqueeze(2))[0]
+        # Pass the raw 2D mask and let transformers build the broadcasted attention mask
+        # internally. Manually pre-building a 3D mask here (mask.unsqueeze(1) * mask.unsqueeze(2))
+        # conflicts with newer transformers versions' own internal unsqueeze logic, which expects
+        # a 2D input and produces a 5D tensor (rather than the expected 4D) when handed an
+        # already-3D mask, causing a shape error in torch's expand().
+        token_embeddings = self.model(source_ids, attention_mask=mask)[0]
         sentence_embeddings = (token_embeddings * mask.unsqueeze(-1)).sum(1) / mask.sum(-1).unsqueeze(-1)
-        return token_embeddings, sentence_embeddings       
+        return token_embeddings, sentence_embeddings
 
     def generate(self, source_ids, decoder_only = True, eos_id = None, beam_size = 5, max_length = 64):
         """ Generate sequence given context (source_ids) """

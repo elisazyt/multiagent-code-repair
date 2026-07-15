@@ -99,36 +99,28 @@ def get_modified_sources(project_name: str, bug_id: str) -> list[str]:
 
 def get_java11_env():
     """
-    Get environment with Java 11 for Defects4J.
-    
-    Returns:
-        Environment dict with Java 11 and Defects4J variables set.
-    
-    Raises:
-        ValueError: If DEFECTS4J_HOME is not set in the environment.
+    Get Java 11 env dict for running Defects4J-related subprocess commands.
+
+    Note that some tools (e.g. Joern) expect newer Java versions so our environment has multiple
+    JDKs, we specifically want Java 11 for Defects4J
     """
+    # make a copy of the existing dict of environment variables, etc
     env = os.environ.copy()
-    
-    # Check for DEFECTS4J_HOME
-    if 'DEFECTS4J_HOME' not in env:
-        raise ValueError("DEFECTS4J_HOME environment variable is not set. Please set it according to Defects4J installation instructions.")
-    
-    # Set PERL5LIB to include Defects4J's core directory
-    defects4j_home = env['DEFECTS4J_HOME']
-    perl5lib = os.path.join(defects4j_home, 'core')
-    existing_perl5lib = env.get('PERL5LIB', '')
-    if existing_perl5lib:
-        env['PERL5LIB'] = f"{perl5lib}:{existing_perl5lib}"
-    else:
-        env['PERL5LIB'] = perl5lib
-    
-    # Set Java 11
-    try:
-        java11_path = subprocess.run(['/usr/libexec/java_home', '-v', '11'], capture_output=True, text=True, check=True).stdout.strip()
+
+    # JAVA11_HOME is the location where JDK is installed, it should already be set
+    # in the environment but added a fallback just in case
+    java11_path = env.get('JAVA11_HOME')
+    if not java11_path:
+        try:
+            java11_path = subprocess.run(['/usr/libexec/java_home', '-v', '11'], capture_output=True, text=True, check=True).stdout.strip()
+        except Exception:
+            java11_path = None  # Fallback to default if Java 11 not found
+
+    if java11_path:
+        # set path to JDK 11
         env['JAVA_HOME'] = java11_path
         existing_path = env.get('PATH', '')
+        # set path to JDK 11 binary
         env['PATH'] = f"{java11_path}/bin:{existing_path}"
-    except:
-        pass  # Fallback to default if Java 11 not found
     
     return env

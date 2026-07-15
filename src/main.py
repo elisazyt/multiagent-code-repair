@@ -1,8 +1,12 @@
+import argparse
 import asyncio
 import os
 import sys
+from dotenv import load_dotenv
 from autogen_core import AgentId, SingleThreadedAgentRuntime
 from autogen_ext.models.openai import OpenAIChatCompletionClient
+
+load_dotenv()
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
@@ -38,18 +42,45 @@ import time
 """
 User-specified variables (via CLI arguments, otherwise use default):
 """
-# one root folder with all the results that the user should specify. default is a folder in this repo
-RESULTS_ROOT = os.path.join(project_root, "results")
-# path to Joern executable
-JOERN_EXECUTABLE = "/opt/homebrew/bin/joern"
-# Number of patching attempts per agent, each attempt consists of calling the agent and testing the patch
-NUM_PATCHING_ATTEMPTS = 3
-# Number of context retrieval rounds per attempt, specifically for the ContextRetrievalAgent
-NUM_RETRIEVAL_ROUNDS = 2
+parser = argparse.ArgumentParser(description="Run the multi-agent program repair pipeline.")
+parser.add_argument(
+    "--results-root",
+    default=os.path.join(project_root, "results"),
+    help="Root folder for all results (chat logs, patches, checkouts, etc.). Default: <repo>/results",
+)
+parser.add_argument(
+    "--project-name",
+    default="Chart",
+    help="Defects4J project name to patch. Must be one of the following: Chart, Closure, Lang, Math, Mockito, Time",
+)
+parser.add_argument(
+    "--bug-id",
+    default="1",
+    help="Defects4J bug ID to patch. Should be a number"
+)
+parser.add_argument(
+    "--num-patching-attempts",
+    type=int,
+    default=3,
+    help="Number of patching attempts per agent, each attempt consists of calling the agent and testing the patch. Default: 3",
+)
+parser.add_argument(
+    "--num-retrieval-rounds",
+    type=int,
+    default=2,
+    help="Number of context retrieval rounds per attempt, specifically for the ContextRetrievalAgent. Default: 2",
+)
+args = parser.parse_args()
 
+# one root folder with all the results that the user should specify. default is a folder in this repo
+RESULTS_ROOT = args.results_root
+# Number of patching attempts per agent, each attempt consists of calling the agent and testing the patch
+NUM_PATCHING_ATTEMPTS = args.num_patching_attempts
+# Number of context retrieval rounds per attempt, specifically for the ContextRetrievalAgent
+NUM_RETRIEVAL_ROUNDS = args.num_retrieval_rounds
 # project name and bug id to patch
-PROJECT_NAME = "Math"
-BUG_ID = "99"
+PROJECT_NAME = args.project_name
+BUG_ID = args.bug_id
 
 """
 Construct all remaining paths, which are all subfolders of RESULTS_ROOT:
@@ -57,7 +88,7 @@ Construct all remaining paths, which are all subfolders of RESULTS_ROOT:
 # path to folder containing bm25 index and corresponding jsonl file
 BM25_PATH = os.path.join(RESULTS_ROOT, "external_tools", "bm25_indexes")
 # directory Joern runs from
-JOERN_WORKING_DIR = os.path.dirname(os.path.realpath(JOERN_EXECUTABLE))
+JOERN_WORKING_DIR = os.path.dirname(os.path.realpath(os.environ.get("JOERN_EXECUTABLE")))
 # path to folder containing Joern workspace for CPG generation/storage
 JOERN_WORKSPACE_PATH = os.path.join(RESULTS_ROOT, "external_tools", "joern_workspace")
 # path to folder where Defects4J projects are checked out, tests are run, etc.
@@ -84,7 +115,7 @@ async def main():
 
     # Create model client (shared across all agents)
     model_client = OpenAIChatCompletionClient(
-        model=os.environ.get("GPT_MODEL", "gpt-4o-mini"),
+        model=os.environ.get("GPT_MODEL"),
         api_key=os.environ.get("OPENAI_API_KEY"),
     )
 
@@ -95,7 +126,7 @@ async def main():
     bug_dict.add_paths(
         results_path=RESULTS_ROOT,
         bm25_path=BM25_PATH,
-        joern_executable=JOERN_EXECUTABLE,
+        joern_executable=os.environ.get("JOERN_EXECUTABLE"),
         joern_working_dir=JOERN_WORKING_DIR,
         joern_workspace_path=JOERN_WORKSPACE_PATH,
         defects4j_checkout_path=DEFECTS4J_CHECKOUT_PATH,

@@ -44,13 +44,17 @@ def run_defects4j_test(
             return {'error': 'Failed to apply Java file patch'}
     
     # Run the test command once after all patches are applied
-    result = subprocess.run(
-        ['defects4j', 'test', '-w', agent_checkout_dir],
-        capture_output=True,
-        text=True,
-        cwd=agent_checkout_dir,
-        env=d4j_utils.get_java11_env()
-    )
+    try:
+        result = subprocess.run(
+            ['defects4j', 'test', '-w', agent_checkout_dir],
+            capture_output=True,
+            text=True,
+            cwd=agent_checkout_dir,
+            env=d4j_utils.get_java11_env(),
+            timeout=600,  # 10 minutes
+        )
+    except subprocess.TimeoutExpired:
+        return {'error': 'defects4j test timed out after 10 minutes'}
     
     # Parse the output to extract test results
     output = result.stdout
