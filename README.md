@@ -1,4 +1,4 @@
-# Multi-Agent LLM System for APR
+# Multi-Agent LLM System for Program Repair
 
 This is an automated program repair tool which patches Java bugs using a multi-agent LLM system. Agents are provided with various prompts and tools to explore the codebase by parsing the program, performing static analysis, and retrieving relevant context via lexical and semantic search. Agent interactions are implemented using [AutoGen Core](https://microsoft.github.io/autogen/stable//user-guide/core-user-guide/index.html).
 
@@ -73,7 +73,7 @@ Below is a brief summary of this project. For more details on the architecture a
 - Directories created during tool calls (e.g. the Joern workspace, Defects4J checkout, BM25 index)
 - The patched .java source code file(s)
 
-This multi-agent system consists of 1 admin agent, 4 patching agents, 1 context retrieval agent, 1 summary agent, 1 testing agent, and 1 patch selection agent:
+**Agents:** This multi-agent system consists of 1 admin agent, 4 patching agents, 1 context retrieval agent, 1 summary agent, 1 testing agent, and 1 patch selection agent:
 - **Admin agent**: orchestrates all agents by routing and logging messages from one agent to another
 - **Patching agents**: generate patches in parallel, given different prompts and tools
 - **Context retrieval agent**: performs context retrieval via tool calls and passes the retrieved context to the corresponding patching agent. The patching agent can request that the context retrieval agent perform the following on demand:
@@ -104,7 +104,7 @@ To make these variables available in a Docker container, add `--env-file .env` a
 docker build -t <image-name> </path/to/repo>
 docker run --name <container-name> --env-file .env -v <path/to/results/root>:/projects/results <image-name> --results-root /projects/results --project-name <name> --bug-id <id> --num-patching-attempts <x> --num-retrieval-rounds <y>
 ```
-> All command line arguments from `--results-root` onward have default values (defined in `src/main.py`). However, the user is recommended to override the defaults with their own arguments whenever possible:
+> All command line arguments from `--results-root` onward have default values (defined in `src/main.py`). However, the user is recommended to override the defaults with their own arguments whenever possible.
 > - `<path/to/results/root>:/projects/results` mounts the specified folder on the user's local machine to `/projects/results` in the container. This allows all the message histories, patches, and tool calls to be populated on the user's local machine even after the container finishes running or is deleted
 > - `--project-name` and `--bug-id` specify which program to patch
 > - `--num-patching-attempts` and `--num-retrieval-rounds` have default values of 3 and 2, respectively, but the user can adjust accordingly based on time and cost constraints
