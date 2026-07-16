@@ -1,24 +1,11 @@
-# Python version requirement: 3.10+ (3.11 recommended for best performance)
-# Core dependencies for code analysis
-tree-sitter>=0.20.0
-tree-sitter-java>=0.20.0
+# Python version: 3.11.14
 
-# OpenAI API for LLM integration
-openai>=1.0.0
-
-# Token counting for API calls
-tiktoken>=0.5.0
-
-# Environment variable management
-python-dotenv>=1.0.0
-
-# AutoGen Core for multi-agent systems
-autogen-core>=0.0.2
-autogen-ext[openai]>=0.0.1
-
-# Pyserini for BM25 retrieval
-pyserini
-
-# PyTorch and transformers for UniXcoder embeddings
-torch>=2.0.0
-transformers>=4.20.0
+tree-sitter==0.25.2
+tree-sitter-java==0.23.5
+openai==2.15.0
+python-dotenv==1.2.1
+autogen-core==0.7.5
+autogen-ext[openai]==0.7.5
+pyserini==1.5.0
+torch==2.10.0
+transformers==4.57.6
