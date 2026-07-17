@@ -59,13 +59,11 @@ ENV DEFECTS4J_HOME=/opt/defects4j
 ENV PATH="${DEFECTS4J_HOME}/framework/bin:${PATH}"
 
 # Install Joern (code property graph tool used for context retrieval).
-# NOTE: verify this matches Joern's current official install instructions before relying on
-# this build - the exact script name/flags may have changed since this was written.
 RUN curl -L "https://github.com/joernio/joern/raw/master/joern-install.sh" -o joern-install.sh \
     && chmod +x joern-install.sh \
     && ./joern-install.sh --install-dir=/opt/joern --without-shell-completion \
     && rm joern-install.sh
-# main.py reads this env var directly (no fallback - it must be set).
+# main.py reads this env var directly
 ENV JOERN_EXECUTABLE=/opt/joern/joern-cli/joern
 
 WORKDIR /projects

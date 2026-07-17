@@ -1,12 +1,12 @@
 # Multi-Agent LLM System for Program Repair
 
-This is an automated program repair tool which patches Java bugs using a multi-agent LLM system. Agents are provided with various prompts and tools to explore the codebase by parsing the program, performing static analysis, and retrieving relevant context via lexical and semantic search. Agent interactions are implemented using [AutoGen Core](https://microsoft.github.io/autogen/stable//user-guide/core-user-guide/index.html).
+This is an automated program repair tool which patches Java bugs using a multi-agent LLM system. Agents are provided with various prompts and tools to explore the codebase by parsing the program, performing static analysis, and retrieving relevant context via lexical and semantic search. Agent interactions are implemented using [AutoGen core](https://microsoft.github.io/autogen/stable//user-guide/core-user-guide/index.html).
 
 This implementation is a significant extension of the frameworks described at the following links:
 - [Repairing Bugs with the Introduction of New Variables: A Multi-Agent Large Language Model](https://dl.acm.org/doi/10.1145/3658644.3691412) (ACM CCS 2024)
 - [Patching Multi-Location Bugs: A Multi-Agent Large Language Model Framework for Automated Code Repair](https://www.societyforscience.org/regeneron-sts/2025-student-finalists/elisa-zhang/) (Regeneron STS 2025)
 
-> Preliminary results are available at the links above. Note that they use the `gpt-4o-mini` model and are more limited in scope and complexity compared to this current implementation. Since I'm no longer collaborating with George Mason University on this project, it's now a side project with a practically nonexistent budget. This means running experiments across all 395 bugs in Defects4J with a SOTA model isn't feasible, so exact performance metrics are currently unavailable.
+> Preliminary results are available at the links above. Note that they use the `gpt-4o-mini` model and are more limited in scope and complexity compared to this current implementation. Since I'm no longer collaborating with George Mason University on this project, it's become a side project with a practically nonexistent budget. This means running experiments across all 395 bugs in Defects4J with a SOTA model isn't feasible, so exact performance metrics are currently unavailable.
 
 This project is currently tailored to the [Defects4J dataset](https://dl.acm.org/doi/10.1145/2610384.2628055). All bugs and patches can be found in the [Defects4J Dissection](https://program-repair.org/defects4j-dissection/#!/).
 
